@@ -1,0 +1,283 @@
+# =============================================================================
+# codemagic.yaml — Per-tenant Capacitor 6 native builds
+#
+# Produces:
+#   iOS     → signed IPA for App Store (unlisted)
+#   Android → signed APK for sideloading
+#
+# Environment variable groups (set in Codemagic UI per build):
+#   app_config:
+#     APP_ID          = app.arbordash.bullard
+#     APP_NAME        = Bullard Tree Care
+#     COMPANY_CODE    = bullardtreecare
+#     APP_ICON_URL    = https://your-cdn.com/icons/bullard-1024.png
+#   app_store_credentials:
+#     APP_STORE_APP_ID = 1234567890  (numeric, from App Store Connect)
+# =============================================================================
+
+workflows:
+
+  # ---------------------------------------------------------------------------
+  # iOS Workflow
+  # ---------------------------------------------------------------------------
+  ios-build:
+    name: iOS — App Store IPA
+    max_build_duration: 120
+    instance_type: mac_mini_m2
+
+    integrations:
+      app_store_connect: codemagic
+
+    environment:
+      ios_signing:
+        distribution_type: app_store
+        bundle_identifier: $APP_ID
+
+      groups:
+        - app_config
+        - app_store_credentials
+
+      vars:
+        XCODE_WORKSPACE: "ios/App/App.xcworkspace"
+        XCODE_SCHEME: "App"
+
+      node: v20
+      xcode: latest
+      cocoapods: default
+
+    triggering:
+      events:
+        - tag
+      tag_patterns:
+        - pattern: "ios-*"
+          include: true
+
+    scripts:
+
+      - name: Install npm dependencies
+        script: npm install
+
+      - name: Ensure www dir exists
+        script: |
+          mkdir -p www
+          [ -f www/index.html ] || echo '<html></html>' > www/index.html
+
+      - name: Capacitor sync (iOS)
+        script: npx cap sync ios
+
+      - name: Install CocoaPods
+        script: cd ios/App && pod install --repo-update
+
+      - name: Patch Info.plist — permissions & app name
+        script: |
+          PLIST="ios/App/App/Info.plist"
+          PB="/usr/libexec/PlistBuddy"
+
+          # Location permissions (background geolocation)
+          $PB -c "Add :NSLocationAlwaysAndWhenInUseUsageDescription string '${APP_NAME} tracks your location for crew management.'" "$PLIST" 2>/dev/null || \
+          $PB -c "Set :NSLocationAlwaysAndWhenInUseUsageDescription '${APP_NAME} tracks your location for crew management.'" "$PLIST"
+
+          $PB -c "Add :NSLocationWhenInUseUsageDescription string '${APP_NAME} uses your location while in use.'" "$PLIST" 2>/dev/null || \
+          $PB -c "Set :NSLocationWhenInUseUsageDescription '${APP_NAME} uses your location while in use.'" "$PLIST"
+
+          $PB -c "Add :NSLocationAlwaysUsageDescription string '${APP_NAME} uses your location in the background for crew tracking.'" "$PLIST" 2>/dev/null || \
+          $PB -c "Set :NSLocationAlwaysUsageDescription '${APP_NAME} uses your location in the background for crew tracking.'" "$PLIST"
+
+          # Background modes: location + remote notifications
+          $PB -c "Add :UIBackgroundModes array" "$PLIST" 2>/dev/null || true
+          $PB -c "Add :UIBackgroundModes: string location" "$PLIST" 2>/dev/null || true
+          $PB -c "Add :UIBackgroundModes: string remote-notification" "$PLIST" 2>/dev/null || true
+
+          # App display name
+          $PB -c "Set :CFBundleName ${APP_NAME}" "$PLIST" 2>/dev/null || \
+          $PB -c "Add :CFBundleName string ${APP_NAME}" "$PLIST"
+          $PB -c "Set :CFBundleDisplayName ${APP_NAME}" "$PLIST" 2>/dev/null || \
+          $PB -c "Add :CFBundleDisplayName string ${APP_NAME}" "$PLIST"
+
+      - name: Set up push notification entitlements
+        script: |
+          ENTITLEMENTS="ios/App/App/App.entitlements"
+          PB="/usr/libexec/PlistBuddy"
+
+          if [ ! -f "$ENTITLEMENTS" ]; then
+            cat > "$ENTITLEMENTS" <<'EOF'
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict/>
+          </plist>
+          EOF
+          fi
+
+          $PB -c "Add :aps-environment string production" "$ENTITLEMENTS" 2>/dev/null || \
+          $PB -c "Set :aps-environment production" "$ENTITLEMENTS"
+
+      - name: Inject app icon
+        script: |
+          ICON_DIR="ios/App/App/Assets.xcassets/AppIcon.appiconset"
+          mkdir -p "$ICON_DIR"
+          curl -L -o /tmp/AppIcon-1024.png "$APP_ICON_URL"
+
+          # Generate all required iOS icon sizes using sips (built into macOS)
+          for SPEC in "20:Icon-20" "40:Icon-20@2x" "60:Icon-20@3x" \
+                      "29:Icon-29" "58:Icon-29@2x" "87:Icon-29@3x" \
+                      "40:Icon-40" "80:Icon-40@2x" "120:Icon-40@3x" \
+                      "120:Icon-60@2x" "180:Icon-60@3x" \
+                      "76:Icon-76" "152:Icon-76@2x" "167:Icon-83.5@2x" \
+                      "1024:Icon-1024"; do
+            SIZE="${SPEC%%:*}"
+            NAME="${SPEC##*:}"
+            sips -z "$SIZE" "$SIZE" /tmp/AppIcon-1024.png --out "${ICON_DIR}/${NAME}.png" > /dev/null
+          done
+
+          cat > "${ICON_DIR}/Contents.json" <<'EOF'
+          {
+            "images": [
+              {"size":"20x20","idiom":"iphone","filename":"Icon-20@2x.png","scale":"2x"},
+              {"size":"20x20","idiom":"iphone","filename":"Icon-20@3x.png","scale":"3x"},
+              {"size":"29x29","idiom":"iphone","filename":"Icon-29@2x.png","scale":"2x"},
+              {"size":"29x29","idiom":"iphone","filename":"Icon-29@3x.png","scale":"3x"},
+              {"size":"40x40","idiom":"iphone","filename":"Icon-40@2x.png","scale":"2x"},
+              {"size":"40x40","idiom":"iphone","filename":"Icon-40@3x.png","scale":"3x"},
+              {"size":"60x60","idiom":"iphone","filename":"Icon-60@2x.png","scale":"2x"},
+              {"size":"60x60","idiom":"iphone","filename":"Icon-60@3x.png","scale":"3x"},
+              {"size":"20x20","idiom":"ipad","filename":"Icon-20.png","scale":"1x"},
+              {"size":"20x20","idiom":"ipad","filename":"Icon-20@2x.png","scale":"2x"},
+              {"size":"29x29","idiom":"ipad","filename":"Icon-29.png","scale":"1x"},
+              {"size":"29x29","idiom":"ipad","filename":"Icon-29@2x.png","scale":"2x"},
+              {"size":"40x40","idiom":"ipad","filename":"Icon-40.png","scale":"1x"},
+              {"size":"40x40","idiom":"ipad","filename":"Icon-40@2x.png","scale":"2x"},
+              {"size":"76x76","idiom":"ipad","filename":"Icon-76.png","scale":"1x"},
+              {"size":"76x76","idiom":"ipad","filename":"Icon-76@2x.png","scale":"2x"},
+              {"size":"83.5x83.5","idiom":"ipad","filename":"Icon-83.5@2x.png","scale":"2x"},
+              {"size":"1024x1024","idiom":"ios-marketing","filename":"Icon-1024.png","scale":"1x"}
+            ],
+            "info": {"version":1,"author":"codemagic"}
+          }
+          EOF
+
+      - name: Apply code signing profiles
+        script: xcode-project use-profiles
+
+      - name: Increment build number
+        script: |
+          cd "$CM_BUILD_DIR/ios/App"
+          LATEST=$(app-store-connect get-latest-app-store-build-number "$APP_STORE_APP_ID" 2>/dev/null || echo "0")
+          NEXT=$(($LATEST + 1))
+          agvtool new-version -all "$NEXT"
+          echo "Build number: $NEXT"
+
+      - name: Build IPA
+        script: |
+          xcode-project build-ipa \
+            --workspace "$XCODE_WORKSPACE" \
+            --scheme "$XCODE_SCHEME"
+
+    artifacts:
+      - build/ios/ipa/*.ipa
+      - /tmp/xcodebuild_logs/*.log
+
+    publishing:
+      email:
+        recipients:
+          - admin@arbordash.app
+        notify:
+          success: true
+          failure: true
+      app_store_connect:
+        auth: integration
+        submit_to_testflight: false
+        submit_to_app_store: true
+
+
+  # ---------------------------------------------------------------------------
+  # Android Workflow
+  # ---------------------------------------------------------------------------
+  android-build:
+    name: Android — Signed APK
+    max_build_duration: 120
+    instance_type: mac_mini_m2
+
+    environment:
+      android_signing:
+        - arbordash_keystore
+
+      groups:
+        - app_config
+
+      node: v20
+      java: 17
+
+    triggering:
+      events:
+        - tag
+      tag_patterns:
+        - pattern: "android-*"
+          include: true
+
+    scripts:
+
+      - name: Install npm dependencies
+        script: npm install
+
+      - name: Ensure www dir exists
+        script: |
+          mkdir -p www
+          [ -f www/index.html ] || echo '<html></html>' > www/index.html
+
+      - name: Capacitor sync (Android)
+        script: npx cap sync android
+
+      - name: Set Android SDK location
+        script: echo "sdk.dir=$ANDROID_SDK_ROOT" > android/local.properties
+
+      - name: Patch AndroidManifest.xml
+        script: |
+          MANIFEST="android/app/src/main/AndroidManifest.xml"
+
+          # App display name
+          sed -i.bak "s/android:label=\"[^\"]*\"/android:label=\"${APP_NAME}\"/" "$MANIFEST"
+
+          # Background geolocation permissions
+          for PERM in "ACCESS_FINE_LOCATION" "ACCESS_BACKGROUND_LOCATION" \
+                      "FOREGROUND_SERVICE" "FOREGROUND_SERVICE_LOCATION" \
+                      "POST_NOTIFICATIONS"; do
+            if ! grep -q "$PERM" "$MANIFEST"; then
+              sed -i.bak "s|<application|<uses-permission android:name=\"android.permission.${PERM}\"/>\n    <application|" "$MANIFEST"
+            fi
+          done
+
+      - name: Inject Android app icon
+        script: |
+          curl -L -o /tmp/ic_launcher_master.png "$APP_ICON_URL"
+          RES_DIR="android/app/src/main/res"
+
+          for SPEC in "mipmap-mdpi:48" "mipmap-hdpi:72" "mipmap-xhdpi:96" \
+                      "mipmap-xxhdpi:144" "mipmap-xxxhdpi:192"; do
+            FOLDER="${SPEC%%:*}"
+            SIZE="${SPEC##*:}"
+            mkdir -p "${RES_DIR}/${FOLDER}"
+            sips -z "$SIZE" "$SIZE" /tmp/ic_launcher_master.png \
+              --out "${RES_DIR}/${FOLDER}/ic_launcher.png" > /dev/null
+            cp "${RES_DIR}/${FOLDER}/ic_launcher.png" \
+               "${RES_DIR}/${FOLDER}/ic_launcher_round.png"
+          done
+
+      - name: Set version
+        script: |
+          sed -i.bak "s/versionCode .*/versionCode $BUILD_NUMBER/" android/app/build.gradle
+          sed -i.bak "s/versionName .*/versionName \"1.0.$BUILD_NUMBER\"/" android/app/build.gradle
+
+      - name: Build signed APK
+        script: cd android && ./gradlew assembleRelease
+
+    artifacts:
+      - android/app/build/outputs/apk/release/*.apk
+
+    publishing:
+      email:
+        recipients:
+          - admin@arbordash.app
+        notify:
+          success: true
+          failure: true
