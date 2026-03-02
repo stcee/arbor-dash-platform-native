@@ -1,0 +1,29 @@
+{
+  "name": "arbordash-platform-native",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Per-tenant native iOS/Android shell for ArborDash. Wraps the web dashboard with native background geolocation and push notifications. Each tenant gets a branded build via environment variables.",
+  "scripts": {
+    "build:web": "echo 'No web build — app loads from remote URL (dashboard.arbordash.app)'",
+    "cap:sync": "npx cap sync",
+    "cap:open:ios": "npx cap open ios",
+    "cap:open:android": "npx cap open android",
+    "cap:add:ios": "npx cap add ios",
+    "cap:add:android": "npx cap add android"
+  },
+  "dependencies": {
+    "@capacitor/core": "^6.0.0",
+    "@capacitor/ios": "^6.0.0",
+    "@capacitor/android": "^6.0.0",
+    "@capacitor/app": "^6.0.0",
+    "@capacitor/geolocation": "^6.0.0",
+    "@capacitor/network": "^6.0.0",
+    "@capacitor/preferences": "^6.0.0",
+    "@capacitor/push-notifications": "^6.0.0",
+    "@capacitor-community/background-geolocation": "^1.2.0"
+  },
+  "devDependencies": {
+    "@capacitor/cli": "^6.0.0",
+    "typescript": "^5.4.0"
+  }
+}
