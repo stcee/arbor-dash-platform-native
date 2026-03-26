@@ -13,6 +13,8 @@
 #     APP_ICON_URL    = https://your-cdn.com/icons/bullard-1024.png
 #   app_store_credentials:
 #     APP_STORE_APP_ID = 1234567890  (numeric, from App Store Connect)
+#   webhook_config:
+#     WEBHOOK_SECRET   = <shared secret for ArborDash API callback>
 # =============================================================================
 
 workflows:
@@ -36,6 +38,7 @@ workflows:
       groups:
         - app_config
         - app_store_credentials
+        - webhook_config
 
       vars:
         XCODE_WORKSPACE: "ios/App/App.xcworkspace"
@@ -188,6 +191,20 @@ workflows:
         auth: integration
         submit_to_testflight: false
         submit_to_app_store: true
+      scripts:
+        - name: Notify ArborDash API on build completion
+          script: |
+            curl -s -X POST "https://api.arbordash.app/api/app-builds/webhook" \
+              -H "Content-Type: application/json" \
+              -H "Authorization: Bearer ${WEBHOOK_SECRET}" \
+              --data '{
+                "buildId": "'"${CM_BUILD_ID}"'",
+                "status": "'"${CM_BUILD_STEP_STATUS}"'",
+                "artifactLinks": '"${CM_ARTIFACT_LINKS:-[]}"',
+                "companyCode": "'"${COMPANY_CODE}"'",
+                "appName": "'"${APP_NAME}"'",
+                "arbordashBuildId": "'"${ARBORDASH_BUILD_ID}"'"
+              }' || true
 
 
   # ---------------------------------------------------------------------------
@@ -204,6 +221,7 @@ workflows:
 
       groups:
         - app_config
+        - webhook_config
 
       node: v20
       java: 17
@@ -281,3 +299,17 @@ workflows:
         notify:
           success: true
           failure: true
+      scripts:
+        - name: Notify ArborDash API on build completion
+          script: |
+            curl -s -X POST "https://api.arbordash.app/api/app-builds/webhook" \
+              -H "Content-Type: application/json" \
+              -H "Authorization: Bearer ${WEBHOOK_SECRET}" \
+              --data '{
+                "buildId": "'"${CM_BUILD_ID}"'",
+                "status": "'"${CM_BUILD_STEP_STATUS}"'",
+                "artifactLinks": '"${CM_ARTIFACT_LINKS:-[]}"',
+                "companyCode": "'"${COMPANY_CODE}"'",
+                "appName": "'"${APP_NAME}"'",
+                "arbordashBuildId": "'"${ARBORDASH_BUILD_ID}"'"
+              }' || true
