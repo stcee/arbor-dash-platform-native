@@ -196,12 +196,23 @@ workflows:
       scripts:
         - name: Notify ArborDash API on build completion
           script: |
+            # Determine success by checking for the IPA on disk first,
+            # then CM_ARTIFACT_LINKS as fallback (may not be populated in publishing scripts).
+            IPA_PATH=$(find build/ios/ipa -name "*.ipa" 2>/dev/null | head -1)
+            if [ -n "${IPA_PATH}" ] && [ -f "${IPA_PATH}" ]; then
+              BUILD_RESULT="success"
+            elif [ -n "${CM_ARTIFACT_LINKS}" ] && [ "${CM_ARTIFACT_LINKS}" != "[]" ]; then
+              BUILD_RESULT="success"
+            else
+              BUILD_RESULT="failure"
+            fi
+            echo "Build result: ${BUILD_RESULT} (IPA: ${IPA_PATH:-none}, CM_ARTIFACT_LINKS: ${CM_ARTIFACT_LINKS:-empty}, step status: ${CM_BUILD_STEP_STATUS})"
             curl -s -X POST "https://api.arbordash.app/api/app-builds/webhook" \
               -H "Content-Type: application/json" \
               -H "Authorization: Bearer ${WEBHOOK_SECRET}" \
               --data '{
                 "buildId": "'"${CM_BUILD_ID}"'",
-                "status": "'"${CM_BUILD_STEP_STATUS}"'",
+                "status": "'"${BUILD_RESULT}"'",
                 "artifactLinks": '"${CM_ARTIFACT_LINKS:-[]}"',
                 "companyCode": "'"${COMPANY_CODE}"'",
                 "appName": "'"${APP_NAME}"'",
@@ -341,12 +352,23 @@ workflows:
       scripts:
         - name: Notify ArborDash API on build completion
           script: |
+            # Determine success by checking for the APK on disk first,
+            # then CM_ARTIFACT_LINKS as fallback (may not be populated in publishing scripts).
+            APK_PATH=$(find android/app/build/outputs/apk/release -name "*.apk" 2>/dev/null | head -1)
+            if [ -n "${APK_PATH}" ] && [ -f "${APK_PATH}" ]; then
+              BUILD_RESULT="success"
+            elif [ -n "${CM_ARTIFACT_LINKS}" ] && [ "${CM_ARTIFACT_LINKS}" != "[]" ]; then
+              BUILD_RESULT="success"
+            else
+              BUILD_RESULT="failure"
+            fi
+            echo "Build result: ${BUILD_RESULT} (APK: ${APK_PATH:-none}, CM_ARTIFACT_LINKS: ${CM_ARTIFACT_LINKS:-empty}, step status: ${CM_BUILD_STEP_STATUS})"
             curl -s -X POST "https://api.arbordash.app/api/app-builds/webhook" \
               -H "Content-Type: application/json" \
               -H "Authorization: Bearer ${WEBHOOK_SECRET}" \
               --data '{
                 "buildId": "'"${CM_BUILD_ID}"'",
-                "status": "'"${CM_BUILD_STEP_STATUS}"'",
+                "status": "'"${BUILD_RESULT}"'",
                 "artifactLinks": '"${CM_ARTIFACT_LINKS:-[]}"',
                 "companyCode": "'"${COMPANY_CODE}"'",
                 "appName": "'"${APP_NAME}"'",
