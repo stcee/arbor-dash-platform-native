@@ -65,8 +65,10 @@ workflows:
           mkdir -p www
           [ -f www/index.html ] || echo '<html></html>' > www/index.html
 
-      - name: Capacitor sync (iOS)
-        script: npx cap sync ios
+      - name: Add iOS platform and sync
+        script: |
+          npx cap add ios 2>/dev/null || true
+          npx cap sync ios
 
       - name: Install CocoaPods
         script: cd ios/App && pod install --repo-update
@@ -243,8 +245,10 @@ workflows:
           mkdir -p www
           [ -f www/index.html ] || echo '<html></html>' > www/index.html
 
-      - name: Capacitor sync (Android)
-        script: npx cap sync android
+      - name: Add Android platform and sync
+        script: |
+          npx cap add android 2>/dev/null || true
+          npx cap sync android
 
       - name: Set Android SDK location
         script: echo "sdk.dir=$ANDROID_SDK_ROOT" > android/local.properties
