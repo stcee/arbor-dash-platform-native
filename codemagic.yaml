@@ -293,18 +293,28 @@ workflows:
           sed -i.bak "s/versionCode .*/versionCode $BUILD_NUMBER/" "$GRADLE"
           sed -i.bak "s/versionName .*/versionName \"1.0.$BUILD_NUMBER\"/" "$GRADLE"
 
-          # Inject release signing config using Codemagic keystore env vars
-          # CM_KEYSTORE, CM_KEY_ALIAS, CM_KEYSTORE_PASSWORD, CM_KEY_PASSWORD
-          # are set automatically by the android_signing section
-          cat >> "$GRADLE" <<'SIGNING'
+          # Debug: show available CM signing env vars
+          echo "CM_KEYSTORE_PATH=${CM_KEYSTORE_PATH:-not set}"
+          echo "CM_KEYSTORE=${CM_KEYSTORE:-not set}"
+          echo "CM_KEY_ALIAS=${CM_KEY_ALIAS:-not set}"
+
+          # Resolve keystore path (Codemagic uses CM_KEYSTORE_PATH or CM_KEYSTORE)
+          KS_PATH="${CM_KEYSTORE_PATH:-$CM_KEYSTORE}"
+          if [ -z "$KS_PATH" ] || [ ! -f "$KS_PATH" ]; then
+            echo "ERROR: No keystore found at CM_KEYSTORE_PATH or CM_KEYSTORE"
+            exit 1
+          fi
+
+          # Inject signing config with actual values (shell-expanded)
+          cat >> "$GRADLE" <<SIGNING
 
           android {
               signingConfigs {
                   release {
-                      storeFile file(System.getenv("CM_KEYSTORE") ?: "/dev/null")
-                      storePassword System.getenv("CM_KEYSTORE_PASSWORD") ?: ""
-                      keyAlias System.getenv("CM_KEY_ALIAS") ?: ""
-                      keyPassword System.getenv("CM_KEY_PASSWORD") ?: ""
+                      storeFile file("${KS_PATH}")
+                      storePassword "${CM_KEYSTORE_PASSWORD}"
+                      keyAlias "${CM_KEY_ALIAS}"
+                      keyPassword "${CM_KEY_PASSWORD}"
                   }
               }
               buildTypes {
