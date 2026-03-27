@@ -285,6 +285,13 @@ workflows:
           curl -L -o /tmp/ic_launcher_master.png "$APP_ICON_URL"
           RES_DIR="android/app/src/main/res"
 
+          # Remove adaptive icon XML files — Capacitor generates these by default
+          # and they override any PNG ic_launcher files. We want our branded PNGs.
+          find "$RES_DIR" -path "*/mipmap-anydpi-v26/ic_launcher*.xml" -delete 2>/dev/null || true
+          rm -f "$RES_DIR/drawable/ic_launcher_background.xml" 2>/dev/null || true
+          rm -f "$RES_DIR/drawable-v24/ic_launcher_foreground.xml" 2>/dev/null || true
+          rm -f "$RES_DIR/drawable/ic_launcher_foreground.xml" 2>/dev/null || true
+
           for SPEC in "mipmap-mdpi:48" "mipmap-hdpi:72" "mipmap-xhdpi:96" \
                       "mipmap-xxhdpi:144" "mipmap-xxxhdpi:192"; do
             FOLDER="${SPEC%%:*}"
