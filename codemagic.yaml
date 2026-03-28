@@ -261,6 +261,36 @@ workflows:
           npx cap add android 2>/dev/null || true
           npx cap sync android
 
+      - name: Inject google-services.json and FCM Gradle plugin
+        script: |
+          if [ -n "${GOOGLE_SERVICES_JSON}" ]; then
+            echo "${GOOGLE_SERVICES_JSON}" > android/app/google-services.json
+            echo "google-services.json written for FCM push notifications"
+
+            # Add Google Services Gradle plugin to project-level build.gradle
+            ROOT_GRADLE="android/build.gradle"
+            if ! grep -q "com.google.gms" "$ROOT_GRADLE"; then
+              sed -i.bak "s|classpath 'com.android.tools.build:gradle:|classpath 'com.google.gms:google-services:4.4.2'\n            classpath 'com.android.tools.build:gradle:|" "$ROOT_GRADLE"
+              echo "Added google-services classpath to root build.gradle"
+            fi
+
+            # Apply the plugin in app-level build.gradle
+            APP_GRADLE="android/app/build.gradle"
+            if ! grep -q "com.google.gms.google-services" "$APP_GRADLE"; then
+              echo "" >> "$APP_GRADLE"
+              echo "apply plugin: 'com.google.gms.google-services'" >> "$APP_GRADLE"
+              echo "Added google-services plugin to app build.gradle"
+            fi
+
+            # Add Firebase Messaging dependency
+            if ! grep -q "firebase-messaging" "$APP_GRADLE"; then
+              sed -i.bak "/^dependencies {/a\\    implementation platform('com.google.firebase:firebase-bom:33.7.0')\n    implementation 'com.google.firebase:firebase-messaging'" "$APP_GRADLE"
+              echo "Added Firebase Messaging dependencies"
+            fi
+          else
+            echo "WARNING: No GOOGLE_SERVICES_JSON — push notifications will not work"
+          fi
+
       - name: Set Android SDK location
         script: echo "sdk.dir=$ANDROID_SDK_ROOT" > android/local.properties
 
