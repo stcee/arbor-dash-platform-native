@@ -37,7 +37,6 @@ workflows:
 
       groups:
         - app_config
-        - app_store_credentials
         - webhook_config
 
       vars:
