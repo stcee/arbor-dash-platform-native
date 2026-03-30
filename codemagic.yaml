@@ -29,7 +29,6 @@ workflows:
 
     integrations:
       app_store_connect: ArborDash
-      developer_portal: ArborDash
 
     environment:
       ios_signing:
