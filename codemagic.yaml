@@ -163,6 +163,26 @@ workflows:
       - name: Apply code signing profiles
         script: xcode-project use-profiles
 
+      - name: Ensure App Store Connect app exists
+        script: |
+          # Check if app already exists, create if not
+          EXISTING=$(app-store-connect apps list \
+            --bundle-id-identifier "$APP_ID" \
+            2>/dev/null | head -1 || true)
+          if [ -z "$EXISTING" ]; then
+            echo "Creating App Store Connect app: ${APP_NAME}"
+            app-store-connect apps create \
+              --name "${APP_NAME}" \
+              --primary-locale "en-US" \
+              --sku "arbordash-${APP_ID}" \
+              --bundle-id-id "$(app-store-connect bundle-ids list \
+                --identifier "$APP_ID" --jsonapi \
+                2>/dev/null | python3 -c "import sys,json; print(json.load(sys.stdin)['data'][0]['id'])")" \
+              2>/dev/null || echo "App may already exist or creation requires manual setup"
+          else
+            echo "App Store Connect app already exists"
+          fi
+
       - name: Increment build number
         script: |
           cd "$CM_BUILD_DIR/ios/App"
