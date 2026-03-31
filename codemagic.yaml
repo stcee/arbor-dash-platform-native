@@ -156,13 +156,15 @@ workflows:
 
       - name: Fetch or create signing files
         script: |
-          # Initialize keychain first — required before certificates can be saved
+          # Initialize keychain — must exist before certs can be saved
           keychain initialize
-          # Fetch existing or create new certificate + provisioning profile
+          # Fetch or create certificate + provisioning profile.
+          # Uses CERTIFICATE_PRIVATE_KEY env var for cert creation.
           app-store-connect fetch-signing-files "$APP_ID" \
             --type IOS_APP_STORE \
-            --create
-          # Install certs and apply profiles to the Xcode project
+            --create \
+            --verbose
+          # Install certs into keychain and apply profiles to Xcode project
           keychain add-certificates
           xcode-project use-profiles
 
