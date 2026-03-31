@@ -11,8 +11,6 @@
 #     APP_NAME        = Bullard Tree Care
 #     COMPANY_CODE    = bullardtreecare
 #     APP_ICON_URL    = https://your-cdn.com/icons/bullard-1024.png
-#   app_store_credentials:
-#     APP_STORE_APP_ID = 1234567890  (numeric, from App Store Connect)
 #   webhook_config:
 #     WEBHOOK_SECRET   = <shared secret for ArborDash API callback>
 # =============================================================================
@@ -163,30 +161,31 @@ workflows:
       - name: Apply code signing profiles
         script: xcode-project use-profiles
 
-      - name: Ensure App Store Connect app exists
+      - name: Resolve App Store Connect app ID
         script: |
-          # Check if app already exists, create if not
-          EXISTING=$(app-store-connect apps list \
-            --bundle-id-identifier "$APP_ID" \
-            2>/dev/null | head -1 || true)
-          if [ -z "$EXISTING" ]; then
-            echo "Creating App Store Connect app: ${APP_NAME}"
-            app-store-connect apps create \
-              --name "${APP_NAME}" \
-              --primary-locale "en-US" \
-              --sku "arbordash-${APP_ID}" \
-              --bundle-id-id "$(app-store-connect bundle-ids list \
-                --identifier "$APP_ID" --jsonapi \
-                2>/dev/null | python3 -c "import sys,json; print(json.load(sys.stdin)['data'][0]['id'])")" \
-              2>/dev/null || echo "App may already exist or creation requires manual setup"
+          # APP_STORE_APP_ID may already be passed from the ArborDash API.
+          # If not, try to resolve it from App Store Connect.
+          if [ -z "$APP_STORE_APP_ID" ]; then
+            APP_STORE_APP_ID=$(app-store-connect apps list \
+              --bundle-id-identifier "$APP_ID" --jsonapi \
+              2>/dev/null | python3 -c "import sys,json; d=json.load(sys.stdin); print(d['data'][0]['id'] if d.get('data') else '')" \
+              2>/dev/null || true)
+          fi
+          if [ -n "$APP_STORE_APP_ID" ]; then
+            echo "APP_STORE_APP_ID=$APP_STORE_APP_ID" >> $CM_ENV
+            echo "Resolved APP_STORE_APP_ID: $APP_STORE_APP_ID"
           else
-            echo "App Store Connect app already exists"
+            echo "WARNING: Could not resolve APP_STORE_APP_ID — will use build number 1"
           fi
 
       - name: Increment build number
         script: |
           cd "$CM_BUILD_DIR/ios/App"
-          LATEST=$(app-store-connect get-latest-app-store-build-number "$APP_STORE_APP_ID" 2>/dev/null || echo "0")
+          if [ -n "$APP_STORE_APP_ID" ]; then
+            LATEST=$(app-store-connect get-latest-app-store-build-number "$APP_STORE_APP_ID" 2>/dev/null || echo "0")
+          else
+            LATEST="0"
+          fi
           NEXT=$(($LATEST + 1))
           agvtool new-version -all "$NEXT"
           echo "Build number: $NEXT"
@@ -204,7 +203,7 @@ workflows:
     publishing:
       email:
         recipients:
-          - admin@arbordash.app
+          - rick@madebyrick.com
         notify:
           success: true
           failure: true
@@ -401,7 +400,7 @@ workflows:
     publishing:
       email:
         recipients:
-          - admin@arbordash.app
+          - rick@madebyrick.com
         notify:
           success: true
           failure: true
