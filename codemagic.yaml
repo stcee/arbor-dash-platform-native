@@ -29,10 +29,6 @@ workflows:
       app_store_connect: ArborDash
 
     environment:
-      ios_signing:
-        distribution_type: app_store
-        bundle_identifier: $APP_ID
-
       groups:
         - app_config
         - webhook_config
@@ -158,8 +154,16 @@ workflows:
           }
           EOF
 
-      - name: Apply code signing profiles
-        script: xcode-project use-profiles
+      - name: Fetch or create signing files
+        script: |
+          # Fetch existing or create new certificate + provisioning profile
+          app-store-connect fetch-signing-files "$APP_ID" \
+            --type IOS_APP_STORE \
+            --create
+          # Apply the fetched profiles to the Xcode project
+          keychain initialize
+          keychain add-certificates
+          xcode-project use-profiles
 
       - name: Resolve App Store Connect app ID
         script: |
