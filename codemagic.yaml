@@ -203,373 +203,303 @@ workflows:
             --workspace "$XCODE_WORKSPACE" \
             --scheme "$XCODE_SCHEME"
 
-      - name: Set App Store metadata
+      - name: Set App Store metadata and upload screenshots
         script: |
-          set -e
+          echo "=== Setting metadata for ${APP_NAME} ==="
 
-          # Generate a JWT for direct API calls
-          JWT=$(app-store-connect get-latest-app-store-build-number "$APP_STORE_APP_ID" \
-            --json 2>/dev/null | echo "skip" || true)
-          # Use the CLI's cached token — it's stored after any CLI command
-          TOKEN_FILE="$HOME/.app-store-connect/token"
+          # Write a Python script that handles all metadata + screenshots
+          # using the App Store Connect API. The Codemagic integration
+          # provides APP_STORE_CONNECT_KEY_IDENTIFIER, APP_STORE_CONNECT_ISSUER_ID,
+          # and APP_STORE_CONNECT_PRIVATE_KEY environment variables.
+          python3 << 'PYEOF'
+          import os, sys, json, time, hashlib, base64, struct
+          from urllib.request import Request, urlopen
+          from urllib.error import HTTPError
+          from datetime import datetime, timezone
 
-          # Helper: make API calls using the Codemagic CLI's auth
-          api() {
-            local METHOD="$1" URL="$2" DATA="$3"
-            app-store-connect api "$METHOD" "$URL" ${DATA:+--data "$DATA"} 2>/dev/null || \
-            curl -s -X "$METHOD" \
-              -H "Authorization: Bearer $(app-store-connect get-jwt 2>/dev/null || echo '')" \
-              -H "Content-Type: application/json" \
-              ${DATA:+-d "$DATA"} \
-              "https://api.appstoreconnect.apple.com$URL"
+          # --- JWT generation for App Store Connect API ---
+          def b64url(data):
+              if isinstance(data, str): data = data.encode()
+              return base64.urlsafe_b64encode(data).rstrip(b'=').decode()
+
+          def generate_jwt():
+              import subprocess
+              key_id = os.environ.get('APP_STORE_CONNECT_KEY_IDENTIFIER', '')
+              issuer_id = os.environ.get('APP_STORE_CONNECT_ISSUER_ID', '')
+              private_key = os.environ.get('APP_STORE_CONNECT_PRIVATE_KEY', '')
+
+              if not all([key_id, issuer_id, private_key]):
+                  print("WARNING: Missing App Store Connect credentials, trying CLI...")
+                  # Fallback: use CLI to make an API call and extract token from verbose output
+                  return None
+
+              now = int(time.time())
+              header = json.dumps({"alg": "ES256", "kid": key_id, "typ": "JWT"})
+              payload = json.dumps({"iss": issuer_id, "iat": now, "exp": now + 1200, "aud": "appstoreconnect-v1"})
+              signing_input = f"{b64url(header)}.{b64url(payload)}"
+
+              # Use openssl to sign (available on macOS)
+              key_file = "/tmp/asc_key.p8"
+              with open(key_file, "w") as f:
+                  f.write(private_key)
+
+              result = subprocess.run(
+                  ["openssl", "dgst", "-sha256", "-sign", key_file],
+                  input=signing_input.encode(), capture_output=True
+              )
+              os.unlink(key_file)
+
+              if result.returncode != 0:
+                  print(f"WARNING: JWT signing failed: {result.stderr.decode()}")
+                  return None
+
+              # Convert DER signature to raw r||s format for ES256
+              der = result.stdout
+              # Parse DER SEQUENCE { INTEGER r, INTEGER s }
+              def parse_der_int(data, offset):
+                  assert data[offset] == 0x02
+                  length = data[offset + 1]
+                  value = data[offset + 2:offset + 2 + length]
+                  # Remove leading zero padding
+                  while len(value) > 32 and value[0] == 0:
+                      value = value[1:]
+                  # Pad to 32 bytes
+                  value = b'\x00' * (32 - len(value)) + value
+                  return value, offset + 2 + length
+
+              r, next_offset = parse_der_int(der, 2)  # Skip SEQUENCE header
+              s, _ = parse_der_int(der, next_offset)
+              raw_sig = r + s
+
+              return f"{signing_input}.{b64url(raw_sig)}"
+
+          def api_call(method, path, data=None, jwt=None):
+              url = f"https://api.appstoreconnect.apple.com{path}"
+              headers = {"Authorization": f"Bearer {jwt}", "Content-Type": "application/json"}
+              body = json.dumps(data).encode() if data else None
+              req = Request(url, data=body, headers=headers, method=method)
+              try:
+                  resp = urlopen(req)
+                  return json.loads(resp.read().decode()) if resp.status != 204 else {}
+              except HTTPError as e:
+                  body = e.read().decode()
+                  print(f"  API {method} {path} -> {e.code}: {body[:300]}")
+                  return None
+
+          # --- Main ---
+          jwt = generate_jwt()
+          if not jwt:
+              print("ERROR: Could not generate JWT — skipping metadata")
+              sys.exit(0)
+
+          app_id = os.environ.get("APP_STORE_APP_ID", "")
+          app_name = os.environ.get("APP_NAME", "ArborDash App")
+          company_code = os.environ.get("COMPANY_CODE", "")
+          build_dir = os.environ.get("CM_BUILD_DIR", ".")
+
+          if not app_id:
+              print("WARNING: No APP_STORE_APP_ID — skipping metadata")
+              sys.exit(0)
+
+          # 1. Get App Store Version
+          print("Finding App Store version...")
+          versions = api_call("GET", f"/v1/apps/{app_id}/appStoreVersions?limit=5", jwt=jwt)
+          version_id = None
+          if versions and versions.get("data"):
+              for v in versions["data"]:
+                  state = v.get("attributes", {}).get("appStoreState", "")
+                  if state in ("PREPARE_FOR_SUBMISSION", "DEVELOPER_REJECTED", "REJECTED", "READY_FOR_REVIEW"):
+                      version_id = v["id"]
+                      break
+              if not version_id:
+                  version_id = versions["data"][0]["id"]
+          if not version_id:
+              print("WARNING: No App Store version found")
+              sys.exit(0)
+          print(f"  Version ID: {version_id}")
+
+          # 2. Set Version Localizations
+          print("Setting version localizations...")
+          locs = api_call("GET", f"/v1/appStoreVersions/{version_id}/appStoreVersionLocalizations", jwt=jwt)
+          en_loc_id = None
+          if locs and locs.get("data"):
+              for l in locs["data"]:
+                  if l.get("attributes", {}).get("locale", "").startswith("en"):
+                      en_loc_id = l["id"]
+                      break
+              if not en_loc_id:
+                  en_loc_id = locs["data"][0]["id"]
+
+          loc_attrs = {
+              "description": f"Crew management and scheduling app for {app_name}. Manage jobs, schedules, estimates, invoices, and team coordination from your mobile device.",
+              "keywords": "crew management,scheduling,field service,tree care,landscaping,job tracking",
+              "supportUrl": "https://arbordash.app/support",
+              "whatsNew": "Initial release",
           }
 
-          echo "=== Setting metadata for ${APP_NAME} (${APP_ID}) ==="
+          if en_loc_id:
+              print(f"  Updating localization {en_loc_id}...")
+              api_call("PATCH", f"/v1/appStoreVersionLocalizations/{en_loc_id}", {
+                  "data": {"id": en_loc_id, "type": "appStoreVersionLocalizations", "attributes": loc_attrs}
+              }, jwt=jwt)
+          else:
+              print("  Creating en-US localization...")
+              loc_attrs["locale"] = "en-US"
+              resp = api_call("POST", f"/v1/appStoreVersions/{version_id}/appStoreVersionLocalizations", {
+                  "data": {"type": "appStoreVersionLocalizations", "attributes": loc_attrs}
+              }, jwt=jwt)
+              if resp and resp.get("data"):
+                  en_loc_id = resp["data"]["id"]
 
-          # --- Get App Store Version ID ---
-          VERSION_INFO=$(app-store-connect apps app-store-versions list \
-            --app-id "$APP_STORE_APP_ID" \
-            --version-string "1.0" \
-            --jsonapi 2>/dev/null || true)
-          VERSION_ID=$(echo "$VERSION_INFO" | python3 -c "
-          import sys,json
-          try:
-            d=json.load(sys.stdin)
-            items=d.get('data',[])
-            for i in items:
-              if i.get('attributes',{}).get('versionString')=='1.0':
-                print(i['id']); break
-            else:
-              if items: print(items[0]['id'])
-          except: pass
-          " 2>/dev/null || true)
+          # 3. Set App Info (privacy policy, category)
+          print("Setting app info...")
+          app_infos = api_call("GET", f"/v1/apps/{app_id}/appInfos?limit=1", jwt=jwt)
+          if app_infos and app_infos.get("data"):
+              ai_id = app_infos["data"][0]["id"]
 
-          if [ -z "$VERSION_ID" ]; then
-            echo "WARNING: Could not find App Store version — skipping metadata"
-            exit 0
-          fi
-          echo "App Store Version ID: $VERSION_ID"
+              # Set category
+              api_call("PATCH", f"/v1/appInfos/{ai_id}", {
+                  "data": {"id": ai_id, "type": "appInfos", "relationships": {
+                      "primaryCategory": {"data": {"type": "appCategories", "id": "BUSINESS"}}
+                  }}
+              }, jwt=jwt)
 
-          # --- Set Version Localizations (description, keywords, support URL) ---
-          echo "Setting version localizations..."
-          app-store-connect app-store-version-localizations create \
-            --app-store-version-id "$VERSION_ID" \
-            --locale "en-US" \
-            --description "Crew management and scheduling app for ${APP_NAME}. Manage jobs, schedules, estimates, invoices, and team coordination — all from your mobile device." \
-            --keywords "crew management,scheduling,field service,tree care,landscaping,job tracking" \
-            --support-url "https://arbordash.app/support" \
-            --whats-new "Initial release" \
-            2>/dev/null || \
-          app-store-connect app-store-version-localizations modify \
-            --description "Crew management and scheduling app for ${APP_NAME}. Manage jobs, schedules, estimates, invoices, and team coordination — all from your mobile device." \
-            --keywords "crew management,scheduling,field service,tree care,landscaping,job tracking" \
-            --support-url "https://arbordash.app/support" \
-            --whats-new "Initial release" \
-            "$VERSION_ID" \
-            2>/dev/null || echo "WARNING: Could not set version localizations"
+              # Set privacy policy on localization
+              ai_locs = api_call("GET", f"/v1/appInfos/{ai_id}/appInfoLocalizations", jwt=jwt)
+              if ai_locs and ai_locs.get("data"):
+                  for ail in ai_locs["data"]:
+                      if ail.get("attributes", {}).get("locale", "").startswith("en"):
+                          api_call("PATCH", f"/v1/appInfoLocalizations/{ail['id']}", {
+                              "data": {"id": ail["id"], "type": "appInfoLocalizations", "attributes": {
+                                  "privacyPolicyUrl": "https://arbordash.app/privacy"
+                              }}
+                          }, jwt=jwt)
+                          break
 
-          # --- Set App Info (privacy policy, category, copyright) ---
-          echo "Setting app info..."
-          APP_INFO=$(curl -s \
-            -H "Authorization: Bearer $(app-store-connect get-jwt 2>/dev/null)" \
-            "https://api.appstoreconnect.apple.com/v1/apps/$APP_STORE_APP_ID/appInfos?limit=1")
-          APP_INFO_ID=$(echo "$APP_INFO" | python3 -c "
-          import sys,json
-          try: print(json.load(sys.stdin)['data'][0]['id'])
-          except: pass
-          " 2>/dev/null || true)
+          # 4. Set Age Rating (all NONE)
+          print("Setting age rating...")
+          ar = api_call("GET", f"/v1/appStoreVersions/{version_id}/ageRatingDeclaration", jwt=jwt)
+          if ar and ar.get("data"):
+              ar_id = ar["data"]["id"]
+              api_call("PATCH", f"/v1/ageRatingDeclarations/{ar_id}", {
+                  "data": {"id": ar_id, "type": "ageRatingDeclarations", "attributes": {
+                      "alcoholTobaccoOrDrugUseOrReferences": "NONE",
+                      "contests": "NONE", "gamblingSimulated": "NONE", "gambling": False,
+                      "horrorOrFearThemes": "NONE", "matureOrSuggestiveThemes": "NONE",
+                      "medicalOrTreatmentInformation": "NONE", "profanityOrCrudeHumor": "NONE",
+                      "sexualContentGraphicAndNudity": "NONE", "sexualContentOrNudity": "NONE",
+                      "violenceCartoonOrFantasy": "NONE", "violenceRealistic": "NONE",
+                      "violenceRealisticProlongedGraphicOrSadistic": "NONE",
+                      "unrestrictedWebAccess": False, "ageRatingOverride": None,
+                  }}
+              }, jwt=jwt)
 
-          if [ -n "$APP_INFO_ID" ]; then
-            # Set primary category to Business
-            curl -s -X PATCH \
-              -H "Authorization: Bearer $(app-store-connect get-jwt 2>/dev/null)" \
-              -H "Content-Type: application/json" \
-              "https://api.appstoreconnect.apple.com/v1/appInfos/$APP_INFO_ID" \
-              -d '{
-                "data": {
-                  "id": "'"$APP_INFO_ID"'",
-                  "type": "appInfos",
-                  "relationships": {
-                    "primaryCategory": {
-                      "data": { "type": "appCategories", "id": "BUSINESS" }
-                    }
-                  }
-                }
-              }' > /dev/null 2>&1 || echo "WARNING: Could not set category"
+          # 5. Set Review Details
+          print("Setting review details...")
+          review_resp = api_call("POST", "/v1/appStoreReviewDetails", {
+              "data": {"type": "appStoreReviewDetails", "attributes": {
+                  "contactFirstName": "Rick", "contactLastName": "Courcy",
+                  "contactEmail": "rick@madebyrick.com", "contactPhone": "+15550100",
+                  "demoAccountRequired": False,
+                  "notes": f"White-labeled crew management app for {app_name}. Unlisted distribution to company employees only."
+              }, "relationships": {"appStoreVersion": {"data": {"type": "appStoreVersions", "id": version_id}}}}
+          }, jwt=jwt)
 
-            # Get app info localization ID
-            LOCALIZATIONS=$(curl -s \
-              -H "Authorization: Bearer $(app-store-connect get-jwt 2>/dev/null)" \
-              "https://api.appstoreconnect.apple.com/v1/appInfos/$APP_INFO_ID/appInfoLocalizations")
-            LOC_ID=$(echo "$LOCALIZATIONS" | python3 -c "
-            import sys,json
-            try:
-              for l in json.load(sys.stdin)['data']:
-                if l.get('attributes',{}).get('locale','').startswith('en'):
-                  print(l['id']); break
-              else: print(json.load(sys.stdin)['data'][0]['id'])
-            except: pass
-            " 2>/dev/null || true)
-
-            if [ -n "$LOC_ID" ]; then
-              curl -s -X PATCH \
-                -H "Authorization: Bearer $(app-store-connect get-jwt 2>/dev/null)" \
-                -H "Content-Type: application/json" \
-                "https://api.appstoreconnect.apple.com/v1/appInfoLocalizations/$LOC_ID" \
-                -d '{
-                  "data": {
-                    "id": "'"$LOC_ID"'",
-                    "type": "appInfoLocalizations",
-                    "attributes": {
-                      "privacyPolicyUrl": "https://arbordash.app/privacy"
-                    }
-                  }
-                }' > /dev/null 2>&1 || echo "WARNING: Could not set privacy policy"
-            fi
-          fi
-
-          # --- Set Age Rating (all NONE for a business app) ---
-          echo "Setting age rating..."
-          AGE_RATING_DATA=$(curl -s \
-            -H "Authorization: Bearer $(app-store-connect get-jwt 2>/dev/null)" \
-            "https://api.appstoreconnect.apple.com/v1/appStoreVersions/$VERSION_ID/ageRatingDeclaration")
-          AGE_RATING_ID=$(echo "$AGE_RATING_DATA" | python3 -c "
-          import sys,json
-          try: print(json.load(sys.stdin)['data']['id'])
-          except: pass
-          " 2>/dev/null || true)
-
-          if [ -n "$AGE_RATING_ID" ]; then
-            curl -s -X PATCH \
-              -H "Authorization: Bearer $(app-store-connect get-jwt 2>/dev/null)" \
-              -H "Content-Type: application/json" \
-              "https://api.appstoreconnect.apple.com/v1/ageRatingDeclarations/$AGE_RATING_ID" \
-              -d '{
-                "data": {
-                  "id": "'"$AGE_RATING_ID"'",
-                  "type": "ageRatingDeclarations",
-                  "attributes": {
-                    "alcoholTobaccoOrDrugUseOrReferences": "NONE",
-                    "contests": "NONE",
-                    "gamblingSimulated": "NONE",
-                    "gambling": false,
-                    "horrorOrFearThemes": "NONE",
-                    "matureOrSuggestiveThemes": "NONE",
-                    "medicalOrTreatmentInformation": "NONE",
-                    "profanityOrCrudeHumor": "NONE",
-                    "sexualContentGraphicAndNudity": "NONE",
-                    "sexualContentOrNudity": "NONE",
-                    "violenceCartoonOrFantasy": "NONE",
-                    "violenceRealistic": "NONE",
-                    "violenceRealisticProlongedGraphicOrSadistic": "NONE",
-                    "unrestrictedWebAccess": false,
-                    "ageRatingOverride": null
-                  }
-                }
-              }' > /dev/null 2>&1 || echo "WARNING: Could not set age rating"
-          fi
-
-          # --- Set App Store Review Details ---
-          echo "Setting review details..."
-          curl -s -X POST \
-            -H "Authorization: Bearer $(app-store-connect get-jwt 2>/dev/null)" \
-            -H "Content-Type: application/json" \
-            "https://api.appstoreconnect.apple.com/v1/appStoreReviewDetails" \
-            -d '{
-              "data": {
-                "type": "appStoreReviewDetails",
-                "attributes": {
-                  "contactFirstName": "Rick",
-                  "contactLastName": "Courcy",
-                  "contactEmail": "rick@madebyrick.com",
-                  "contactPhone": "+1-555-0100",
-                  "demoAccountRequired": false,
-                  "notes": "This is a white-labeled crew management app for '"${APP_NAME}"'. It is intended for unlisted distribution to the company'"'"'s employees only, not for public release."
-                },
-                "relationships": {
-                  "appStoreVersion": {
-                    "data": { "type": "appStoreVersions", "id": "'"$VERSION_ID"'" }
-                  }
-                }
-              }
-            }' > /dev/null 2>&1 || echo "WARNING: Could not set review details"
-
-          echo "=== Metadata setup complete ==="
-
-      - name: Upload App Store screenshots
-        script: |
-          set -e
-          echo "=== Uploading screenshots for ${APP_NAME} ==="
-
-          JWT=$(app-store-connect get-jwt 2>/dev/null)
-          API="https://api.appstoreconnect.apple.com/v1"
-
-          # Get version ID
-          VERSION_ID="$APP_STORE_APP_ID"  # Will be resolved below
-          VERSION_INFO=$(curl -s -H "Authorization: Bearer $JWT" \
-            "$API/apps/$APP_STORE_APP_ID/appStoreVersions?filter[versionString]=1.0&limit=1")
-          VERSION_ID=$(echo "$VERSION_INFO" | python3 -c "
-          import sys,json
-          try: print(json.load(sys.stdin)['data'][0]['id'])
-          except: pass
-          " 2>/dev/null || true)
-
-          if [ -z "$VERSION_ID" ]; then
-            echo "WARNING: Could not find App Store version — skipping screenshots"
-            exit 0
-          fi
-
-          # Get localization ID
-          LOCS=$(curl -s -H "Authorization: Bearer $JWT" \
-            "$API/appStoreVersions/$VERSION_ID/appStoreVersionLocalizations")
-          LOC_ID=$(echo "$LOCS" | python3 -c "
-          import sys,json
-          try:
-            for l in json.load(sys.stdin)['data']:
-              if l.get('attributes',{}).get('locale','').startswith('en'):
-                print(l['id']); break
-          except: pass
-          " 2>/dev/null || true)
-
-          if [ -z "$LOC_ID" ]; then
-            echo "WARNING: No en-US localization found — skipping screenshots"
-            exit 0
-          fi
-
-          upload_screenshot() {
-            local DISPLAY_TYPE="$1" FILE_PATH="$2"
-            local FILE_NAME=$(basename "$FILE_PATH")
-            local FILE_SIZE=$(stat -f%z "$FILE_PATH" 2>/dev/null || stat -c%s "$FILE_PATH" 2>/dev/null)
-
-            echo "Uploading $FILE_NAME as $DISPLAY_TYPE ($FILE_SIZE bytes)..."
-
-            # Check if screenshot set exists
-            SETS=$(curl -s -H "Authorization: Bearer $JWT" \
-              "$API/appStoreVersionLocalizations/$LOC_ID/appScreenshotSets")
-            SET_ID=$(echo "$SETS" | python3 -c "
-            import sys,json
-            dt='$DISPLAY_TYPE'
-            try:
-              for s in json.load(sys.stdin)['data']:
-                if s.get('attributes',{}).get('screenshotDisplayType')==dt:
-                  print(s['id']); break
-            except: pass
-            " 2>/dev/null || true)
-
-            # Create screenshot set if needed
-            if [ -z "$SET_ID" ]; then
-              SET_RESP=$(curl -s -X POST -H "Authorization: Bearer $JWT" \
-                -H "Content-Type: application/json" "$API/appScreenshotSets" \
-                -d '{
-                  "data": {
-                    "type": "appScreenshotSets",
-                    "attributes": { "screenshotDisplayType": "'"$DISPLAY_TYPE"'" },
-                    "relationships": {
-                      "appStoreVersionLocalization": {
-                        "data": { "type": "appStoreVersionLocalizations", "id": "'"$LOC_ID"'" }
-                      }
-                    }
-                  }
-                }')
-              SET_ID=$(echo "$SET_RESP" | python3 -c "
-              import sys,json
-              try: print(json.load(sys.stdin)['data']['id'])
-              except: pass
-              " 2>/dev/null || true)
-            fi
-
-            if [ -z "$SET_ID" ]; then
-              echo "WARNING: Could not create screenshot set for $DISPLAY_TYPE"
-              return
-            fi
-
-            # Reserve screenshot
-            RESERVE=$(curl -s -X POST -H "Authorization: Bearer $JWT" \
-              -H "Content-Type: application/json" "$API/appScreenshots" \
-              -d '{
-                "data": {
-                  "type": "appScreenshots",
-                  "attributes": {
-                    "fileName": "'"$FILE_NAME"'",
-                    "fileSize": '"$FILE_SIZE"'
-                  },
-                  "relationships": {
-                    "appScreenshotSet": {
-                      "data": { "type": "appScreenshotSets", "id": "'"$SET_ID"'" }
-                    }
-                  }
-                }
-              }')
-
-            SCREENSHOT_ID=$(echo "$RESERVE" | python3 -c "
-            import sys,json
-            try: print(json.load(sys.stdin)['data']['id'])
-            except: pass
-            " 2>/dev/null || true)
-
-            UPLOAD_URL=$(echo "$RESERVE" | python3 -c "
-            import sys,json
-            try:
-              ops=json.load(sys.stdin)['data']['attributes']['uploadOperations']
-              print(ops[0]['url'])
-            except: pass
-            " 2>/dev/null || true)
-
-            UPLOAD_HEADERS=$(echo "$RESERVE" | python3 -c "
-            import sys,json
-            try:
-              ops=json.load(sys.stdin)['data']['attributes']['uploadOperations']
-              for h in ops[0].get('requestHeaders',[]):
-                print(h['name']+': '+h['value'])
-            except: pass
-            " 2>/dev/null || true)
-
-            if [ -z "$SCREENSHOT_ID" ] || [ -z "$UPLOAD_URL" ]; then
-              echo "WARNING: Could not reserve screenshot upload for $DISPLAY_TYPE"
-              echo "Response: $RESERVE"
-              return
-            fi
-
-            # Upload the file
-            HEADER_ARGS=""
-            while IFS= read -r line; do
-              [ -n "$line" ] && HEADER_ARGS="$HEADER_ARGS -H \"$line\""
-            done <<< "$UPLOAD_HEADERS"
-
-            eval curl -s -X PUT "$UPLOAD_URL" $HEADER_ARGS --data-binary "@$FILE_PATH" > /dev/null 2>&1
-
-            # Commit the upload
-            curl -s -X PATCH -H "Authorization: Bearer $JWT" \
-              -H "Content-Type: application/json" \
-              "$API/appScreenshots/$SCREENSHOT_ID" \
-              -d '{
-                "data": {
-                  "id": "'"$SCREENSHOT_ID"'",
-                  "type": "appScreenshots",
-                  "attributes": { "uploaded": true, "sourceFileChecksum": null }
-                }
-              }' > /dev/null 2>&1
-
-            echo "Uploaded $FILE_NAME for $DISPLAY_TYPE"
+          # 6. Upload Screenshots
+          print("Uploading screenshots...")
+          screenshot_map = {
+              "APP_IPHONE_65": os.path.join(build_dir, "screenshots/iOS/arbordash-iphone-screenshot.png"),
+              "APP_IPAD_PRO_3GEN_129": os.path.join(build_dir, "screenshots/iOS/arbordash-ipad-screenshot.png"),
           }
 
-          # Upload iPhone 6.5" screenshot
-          IPHONE_SCREENSHOT="$CM_BUILD_DIR/screenshots/iOS/arbordash-iphone-screenshot.png"
-          if [ -f "$IPHONE_SCREENSHOT" ]; then
-            upload_screenshot "APP_IPHONE_65" "$IPHONE_SCREENSHOT"
-          else
-            echo "WARNING: iPhone screenshot not found at $IPHONE_SCREENSHOT"
-          fi
+          if not en_loc_id:
+              print("  WARNING: No localization ID — skipping screenshots")
+          else:
+              for display_type, file_path in screenshot_map.items():
+                  if not os.path.exists(file_path):
+                      print(f"  WARNING: {file_path} not found — skipping {display_type}")
+                      continue
 
-          # Upload iPad Pro 12.9" screenshot
-          IPAD_SCREENSHOT="$CM_BUILD_DIR/screenshots/iOS/arbordash-ipad-screenshot.png"
-          if [ -f "$IPAD_SCREENSHOT" ]; then
-            upload_screenshot "APP_IPAD_PRO_3GEN_129" "$IPAD_SCREENSHOT"
-          else
-            echo "WARNING: iPad screenshot not found at $IPAD_SCREENSHOT"
-          fi
+                  file_size = os.path.getsize(file_path)
+                  file_name = os.path.basename(file_path)
+                  print(f"  Uploading {file_name} as {display_type} ({file_size} bytes)...")
 
-          echo "=== Screenshot upload complete ==="
+                  # Check for existing screenshot set
+                  sets = api_call("GET", f"/v1/appStoreVersionLocalizations/{en_loc_id}/appScreenshotSets", jwt=jwt)
+                  set_id = None
+                  if sets and sets.get("data"):
+                      for s in sets["data"]:
+                          if s.get("attributes", {}).get("screenshotDisplayType") == display_type:
+                              set_id = s["id"]
+                              # Check if screenshots already exist in this set
+                              existing = api_call("GET", f"/v1/appScreenshotSets/{set_id}/appScreenshots", jwt=jwt)
+                              if existing and existing.get("data") and len(existing["data"]) > 0:
+                                  print(f"    Screenshot already exists for {display_type} — skipping")
+                                  set_id = "SKIP"
+                              break
+
+                  if set_id == "SKIP":
+                      continue
+
+                  # Create set if needed
+                  if not set_id:
+                      resp = api_call("POST", "/v1/appScreenshotSets", {
+                          "data": {"type": "appScreenshotSets", "attributes": {"screenshotDisplayType": display_type},
+                              "relationships": {"appStoreVersionLocalization": {"data": {"type": "appStoreVersionLocalizations", "id": en_loc_id}}}}
+                      }, jwt=jwt)
+                      if resp and resp.get("data"):
+                          set_id = resp["data"]["id"]
+
+                  if not set_id:
+                      print(f"    WARNING: Could not create screenshot set for {display_type}")
+                      continue
+
+                  # Reserve upload
+                  reserve = api_call("POST", "/v1/appScreenshots", {
+                      "data": {"type": "appScreenshots", "attributes": {"fileName": file_name, "fileSize": file_size},
+                          "relationships": {"appScreenshotSet": {"data": {"type": "appScreenshotSets", "id": set_id}}}}
+                  }, jwt=jwt)
+
+                  if not reserve or not reserve.get("data"):
+                      print(f"    WARNING: Could not reserve upload for {display_type}")
+                      continue
+
+                  ss_id = reserve["data"]["id"]
+                  ops = reserve["data"].get("attributes", {}).get("uploadOperations", [])
+
+                  if not ops:
+                      print(f"    WARNING: No upload operations returned for {display_type}")
+                      continue
+
+                  # Upload each part
+                  with open(file_path, "rb") as f:
+                      file_data = f.read()
+
+                  for op in ops:
+                      url = op["url"]
+                      headers_list = {h["name"]: h["value"] for h in op.get("requestHeaders", [])}
+                      offset = op.get("offset", 0)
+                      length = op.get("length", len(file_data))
+                      chunk = file_data[offset:offset + length]
+
+                      req = Request(url, data=chunk, headers=headers_list, method="PUT")
+                      try:
+                          urlopen(req)
+                      except HTTPError as e:
+                          print(f"    WARNING: Upload PUT failed: {e.code}")
+
+                  # Compute MD5 checksum
+                  md5 = hashlib.md5(file_data).digest()
+                  checksum = base64.b64encode(md5).decode()
+
+                  # Commit
+                  api_call("PATCH", f"/v1/appScreenshots/{ss_id}", {
+                      "data": {"id": ss_id, "type": "appScreenshots", "attributes": {"uploaded": True, "sourceFileChecksum": checksum}}
+                  }, jwt=jwt)
+                  print(f"    Uploaded {file_name}")
+
+          print("=== Metadata and screenshots complete ===")
+          PYEOF
 
     artifacts:
       - build/ios/ipa/*.ipa
