@@ -92,6 +92,10 @@ workflows:
           $PB -c "Set :CFBundleDisplayName ${APP_NAME}" "$PLIST" 2>/dev/null || \
           $PB -c "Add :CFBundleDisplayName string ${APP_NAME}" "$PLIST"
 
+          # Export compliance — app only uses standard HTTPS (exempt)
+          $PB -c "Add :ITSAppUsesNonExemptEncryption bool false" "$PLIST" 2>/dev/null || \
+          $PB -c "Set :ITSAppUsesNonExemptEncryption false" "$PLIST"
+
       - name: Set up push notification entitlements
         script: |
           ENTITLEMENTS="ios/App/App/App.entitlements"
