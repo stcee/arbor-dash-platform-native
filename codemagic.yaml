@@ -203,6 +203,374 @@ workflows:
             --workspace "$XCODE_WORKSPACE" \
             --scheme "$XCODE_SCHEME"
 
+      - name: Set App Store metadata
+        script: |
+          set -e
+
+          # Generate a JWT for direct API calls
+          JWT=$(app-store-connect get-latest-app-store-build-number "$APP_STORE_APP_ID" \
+            --json 2>/dev/null | echo "skip" || true)
+          # Use the CLI's cached token — it's stored after any CLI command
+          TOKEN_FILE="$HOME/.app-store-connect/token"
+
+          # Helper: make API calls using the Codemagic CLI's auth
+          api() {
+            local METHOD="$1" URL="$2" DATA="$3"
+            app-store-connect api "$METHOD" "$URL" ${DATA:+--data "$DATA"} 2>/dev/null || \
+            curl -s -X "$METHOD" \
+              -H "Authorization: Bearer $(app-store-connect get-jwt 2>/dev/null || echo '')" \
+              -H "Content-Type: application/json" \
+              ${DATA:+-d "$DATA"} \
+              "https://api.appstoreconnect.apple.com$URL"
+          }
+
+          echo "=== Setting metadata for ${APP_NAME} (${APP_ID}) ==="
+
+          # --- Get App Store Version ID ---
+          VERSION_INFO=$(app-store-connect apps app-store-versions list \
+            --app-id "$APP_STORE_APP_ID" \
+            --version-string "1.0" \
+            --jsonapi 2>/dev/null || true)
+          VERSION_ID=$(echo "$VERSION_INFO" | python3 -c "
+          import sys,json
+          try:
+            d=json.load(sys.stdin)
+            items=d.get('data',[])
+            for i in items:
+              if i.get('attributes',{}).get('versionString')=='1.0':
+                print(i['id']); break
+            else:
+              if items: print(items[0]['id'])
+          except: pass
+          " 2>/dev/null || true)
+
+          if [ -z "$VERSION_ID" ]; then
+            echo "WARNING: Could not find App Store version — skipping metadata"
+            exit 0
+          fi
+          echo "App Store Version ID: $VERSION_ID"
+
+          # --- Set Version Localizations (description, keywords, support URL) ---
+          echo "Setting version localizations..."
+          app-store-connect app-store-version-localizations create \
+            --app-store-version-id "$VERSION_ID" \
+            --locale "en-US" \
+            --description "Crew management and scheduling app for ${APP_NAME}. Manage jobs, schedules, estimates, invoices, and team coordination — all from your mobile device." \
+            --keywords "crew management,scheduling,field service,tree care,landscaping,job tracking" \
+            --support-url "https://arbordash.app/support" \
+            --whats-new "Initial release" \
+            2>/dev/null || \
+          app-store-connect app-store-version-localizations modify \
+            --description "Crew management and scheduling app for ${APP_NAME}. Manage jobs, schedules, estimates, invoices, and team coordination — all from your mobile device." \
+            --keywords "crew management,scheduling,field service,tree care,landscaping,job tracking" \
+            --support-url "https://arbordash.app/support" \
+            --whats-new "Initial release" \
+            "$VERSION_ID" \
+            2>/dev/null || echo "WARNING: Could not set version localizations"
+
+          # --- Set App Info (privacy policy, category, copyright) ---
+          echo "Setting app info..."
+          APP_INFO=$(curl -s \
+            -H "Authorization: Bearer $(app-store-connect get-jwt 2>/dev/null)" \
+            "https://api.appstoreconnect.apple.com/v1/apps/$APP_STORE_APP_ID/appInfos?limit=1")
+          APP_INFO_ID=$(echo "$APP_INFO" | python3 -c "
+          import sys,json
+          try: print(json.load(sys.stdin)['data'][0]['id'])
+          except: pass
+          " 2>/dev/null || true)
+
+          if [ -n "$APP_INFO_ID" ]; then
+            # Set primary category to Business
+            curl -s -X PATCH \
+              -H "Authorization: Bearer $(app-store-connect get-jwt 2>/dev/null)" \
+              -H "Content-Type: application/json" \
+              "https://api.appstoreconnect.apple.com/v1/appInfos/$APP_INFO_ID" \
+              -d '{
+                "data": {
+                  "id": "'"$APP_INFO_ID"'",
+                  "type": "appInfos",
+                  "relationships": {
+                    "primaryCategory": {
+                      "data": { "type": "appCategories", "id": "BUSINESS" }
+                    }
+                  }
+                }
+              }' > /dev/null 2>&1 || echo "WARNING: Could not set category"
+
+            # Get app info localization ID
+            LOCALIZATIONS=$(curl -s \
+              -H "Authorization: Bearer $(app-store-connect get-jwt 2>/dev/null)" \
+              "https://api.appstoreconnect.apple.com/v1/appInfos/$APP_INFO_ID/appInfoLocalizations")
+            LOC_ID=$(echo "$LOCALIZATIONS" | python3 -c "
+            import sys,json
+            try:
+              for l in json.load(sys.stdin)['data']:
+                if l.get('attributes',{}).get('locale','').startswith('en'):
+                  print(l['id']); break
+              else: print(json.load(sys.stdin)['data'][0]['id'])
+            except: pass
+            " 2>/dev/null || true)
+
+            if [ -n "$LOC_ID" ]; then
+              curl -s -X PATCH \
+                -H "Authorization: Bearer $(app-store-connect get-jwt 2>/dev/null)" \
+                -H "Content-Type: application/json" \
+                "https://api.appstoreconnect.apple.com/v1/appInfoLocalizations/$LOC_ID" \
+                -d '{
+                  "data": {
+                    "id": "'"$LOC_ID"'",
+                    "type": "appInfoLocalizations",
+                    "attributes": {
+                      "privacyPolicyUrl": "https://arbordash.app/privacy"
+                    }
+                  }
+                }' > /dev/null 2>&1 || echo "WARNING: Could not set privacy policy"
+            fi
+          fi
+
+          # --- Set Age Rating (all NONE for a business app) ---
+          echo "Setting age rating..."
+          AGE_RATING_DATA=$(curl -s \
+            -H "Authorization: Bearer $(app-store-connect get-jwt 2>/dev/null)" \
+            "https://api.appstoreconnect.apple.com/v1/appStoreVersions/$VERSION_ID/ageRatingDeclaration")
+          AGE_RATING_ID=$(echo "$AGE_RATING_DATA" | python3 -c "
+          import sys,json
+          try: print(json.load(sys.stdin)['data']['id'])
+          except: pass
+          " 2>/dev/null || true)
+
+          if [ -n "$AGE_RATING_ID" ]; then
+            curl -s -X PATCH \
+              -H "Authorization: Bearer $(app-store-connect get-jwt 2>/dev/null)" \
+              -H "Content-Type: application/json" \
+              "https://api.appstoreconnect.apple.com/v1/ageRatingDeclarations/$AGE_RATING_ID" \
+              -d '{
+                "data": {
+                  "id": "'"$AGE_RATING_ID"'",
+                  "type": "ageRatingDeclarations",
+                  "attributes": {
+                    "alcoholTobaccoOrDrugUseOrReferences": "NONE",
+                    "contests": "NONE",
+                    "gamblingSimulated": "NONE",
+                    "gambling": false,
+                    "horrorOrFearThemes": "NONE",
+                    "matureOrSuggestiveThemes": "NONE",
+                    "medicalOrTreatmentInformation": "NONE",
+                    "profanityOrCrudeHumor": "NONE",
+                    "sexualContentGraphicAndNudity": "NONE",
+                    "sexualContentOrNudity": "NONE",
+                    "violenceCartoonOrFantasy": "NONE",
+                    "violenceRealistic": "NONE",
+                    "violenceRealisticProlongedGraphicOrSadistic": "NONE",
+                    "unrestrictedWebAccess": false,
+                    "ageRatingOverride": null
+                  }
+                }
+              }' > /dev/null 2>&1 || echo "WARNING: Could not set age rating"
+          fi
+
+          # --- Set App Store Review Details ---
+          echo "Setting review details..."
+          curl -s -X POST \
+            -H "Authorization: Bearer $(app-store-connect get-jwt 2>/dev/null)" \
+            -H "Content-Type: application/json" \
+            "https://api.appstoreconnect.apple.com/v1/appStoreReviewDetails" \
+            -d '{
+              "data": {
+                "type": "appStoreReviewDetails",
+                "attributes": {
+                  "contactFirstName": "Rick",
+                  "contactLastName": "Courcy",
+                  "contactEmail": "rick@madebyrick.com",
+                  "contactPhone": "+1-555-0100",
+                  "demoAccountRequired": false,
+                  "notes": "This is a white-labeled crew management app for '"${APP_NAME}"'. It is intended for unlisted distribution to the company'"'"'s employees only, not for public release."
+                },
+                "relationships": {
+                  "appStoreVersion": {
+                    "data": { "type": "appStoreVersions", "id": "'"$VERSION_ID"'" }
+                  }
+                }
+              }
+            }' > /dev/null 2>&1 || echo "WARNING: Could not set review details"
+
+          echo "=== Metadata setup complete ==="
+
+      - name: Upload App Store screenshots
+        script: |
+          set -e
+          echo "=== Uploading screenshots for ${APP_NAME} ==="
+
+          JWT=$(app-store-connect get-jwt 2>/dev/null)
+          API="https://api.appstoreconnect.apple.com/v1"
+
+          # Get version ID
+          VERSION_ID="$APP_STORE_APP_ID"  # Will be resolved below
+          VERSION_INFO=$(curl -s -H "Authorization: Bearer $JWT" \
+            "$API/apps/$APP_STORE_APP_ID/appStoreVersions?filter[versionString]=1.0&limit=1")
+          VERSION_ID=$(echo "$VERSION_INFO" | python3 -c "
+          import sys,json
+          try: print(json.load(sys.stdin)['data'][0]['id'])
+          except: pass
+          " 2>/dev/null || true)
+
+          if [ -z "$VERSION_ID" ]; then
+            echo "WARNING: Could not find App Store version — skipping screenshots"
+            exit 0
+          fi
+
+          # Get localization ID
+          LOCS=$(curl -s -H "Authorization: Bearer $JWT" \
+            "$API/appStoreVersions/$VERSION_ID/appStoreVersionLocalizations")
+          LOC_ID=$(echo "$LOCS" | python3 -c "
+          import sys,json
+          try:
+            for l in json.load(sys.stdin)['data']:
+              if l.get('attributes',{}).get('locale','').startswith('en'):
+                print(l['id']); break
+          except: pass
+          " 2>/dev/null || true)
+
+          if [ -z "$LOC_ID" ]; then
+            echo "WARNING: No en-US localization found — skipping screenshots"
+            exit 0
+          fi
+
+          upload_screenshot() {
+            local DISPLAY_TYPE="$1" FILE_PATH="$2"
+            local FILE_NAME=$(basename "$FILE_PATH")
+            local FILE_SIZE=$(stat -f%z "$FILE_PATH" 2>/dev/null || stat -c%s "$FILE_PATH" 2>/dev/null)
+
+            echo "Uploading $FILE_NAME as $DISPLAY_TYPE ($FILE_SIZE bytes)..."
+
+            # Check if screenshot set exists
+            SETS=$(curl -s -H "Authorization: Bearer $JWT" \
+              "$API/appStoreVersionLocalizations/$LOC_ID/appScreenshotSets")
+            SET_ID=$(echo "$SETS" | python3 -c "
+            import sys,json
+            dt='$DISPLAY_TYPE'
+            try:
+              for s in json.load(sys.stdin)['data']:
+                if s.get('attributes',{}).get('screenshotDisplayType')==dt:
+                  print(s['id']); break
+            except: pass
+            " 2>/dev/null || true)
+
+            # Create screenshot set if needed
+            if [ -z "$SET_ID" ]; then
+              SET_RESP=$(curl -s -X POST -H "Authorization: Bearer $JWT" \
+                -H "Content-Type: application/json" "$API/appScreenshotSets" \
+                -d '{
+                  "data": {
+                    "type": "appScreenshotSets",
+                    "attributes": { "screenshotDisplayType": "'"$DISPLAY_TYPE"'" },
+                    "relationships": {
+                      "appStoreVersionLocalization": {
+                        "data": { "type": "appStoreVersionLocalizations", "id": "'"$LOC_ID"'" }
+                      }
+                    }
+                  }
+                }')
+              SET_ID=$(echo "$SET_RESP" | python3 -c "
+              import sys,json
+              try: print(json.load(sys.stdin)['data']['id'])
+              except: pass
+              " 2>/dev/null || true)
+            fi
+
+            if [ -z "$SET_ID" ]; then
+              echo "WARNING: Could not create screenshot set for $DISPLAY_TYPE"
+              return
+            fi
+
+            # Reserve screenshot
+            RESERVE=$(curl -s -X POST -H "Authorization: Bearer $JWT" \
+              -H "Content-Type: application/json" "$API/appScreenshots" \
+              -d '{
+                "data": {
+                  "type": "appScreenshots",
+                  "attributes": {
+                    "fileName": "'"$FILE_NAME"'",
+                    "fileSize": '"$FILE_SIZE"'
+                  },
+                  "relationships": {
+                    "appScreenshotSet": {
+                      "data": { "type": "appScreenshotSets", "id": "'"$SET_ID"'" }
+                    }
+                  }
+                }
+              }')
+
+            SCREENSHOT_ID=$(echo "$RESERVE" | python3 -c "
+            import sys,json
+            try: print(json.load(sys.stdin)['data']['id'])
+            except: pass
+            " 2>/dev/null || true)
+
+            UPLOAD_URL=$(echo "$RESERVE" | python3 -c "
+            import sys,json
+            try:
+              ops=json.load(sys.stdin)['data']['attributes']['uploadOperations']
+              print(ops[0]['url'])
+            except: pass
+            " 2>/dev/null || true)
+
+            UPLOAD_HEADERS=$(echo "$RESERVE" | python3 -c "
+            import sys,json
+            try:
+              ops=json.load(sys.stdin)['data']['attributes']['uploadOperations']
+              for h in ops[0].get('requestHeaders',[]):
+                print(h['name']+': '+h['value'])
+            except: pass
+            " 2>/dev/null || true)
+
+            if [ -z "$SCREENSHOT_ID" ] || [ -z "$UPLOAD_URL" ]; then
+              echo "WARNING: Could not reserve screenshot upload for $DISPLAY_TYPE"
+              echo "Response: $RESERVE"
+              return
+            fi
+
+            # Upload the file
+            HEADER_ARGS=""
+            while IFS= read -r line; do
+              [ -n "$line" ] && HEADER_ARGS="$HEADER_ARGS -H \"$line\""
+            done <<< "$UPLOAD_HEADERS"
+
+            eval curl -s -X PUT "$UPLOAD_URL" $HEADER_ARGS --data-binary "@$FILE_PATH" > /dev/null 2>&1
+
+            # Commit the upload
+            curl -s -X PATCH -H "Authorization: Bearer $JWT" \
+              -H "Content-Type: application/json" \
+              "$API/appScreenshots/$SCREENSHOT_ID" \
+              -d '{
+                "data": {
+                  "id": "'"$SCREENSHOT_ID"'",
+                  "type": "appScreenshots",
+                  "attributes": { "uploaded": true, "sourceFileChecksum": null }
+                }
+              }' > /dev/null 2>&1
+
+            echo "Uploaded $FILE_NAME for $DISPLAY_TYPE"
+          }
+
+          # Upload iPhone 6.5" screenshot
+          IPHONE_SCREENSHOT="$CM_BUILD_DIR/screenshots/iOS/arbordash-iphone-screenshot.png"
+          if [ -f "$IPHONE_SCREENSHOT" ]; then
+            upload_screenshot "APP_IPHONE_65" "$IPHONE_SCREENSHOT"
+          else
+            echo "WARNING: iPhone screenshot not found at $IPHONE_SCREENSHOT"
+          fi
+
+          # Upload iPad Pro 12.9" screenshot
+          IPAD_SCREENSHOT="$CM_BUILD_DIR/screenshots/iOS/arbordash-ipad-screenshot.png"
+          if [ -f "$IPAD_SCREENSHOT" ]; then
+            upload_screenshot "APP_IPAD_PRO_3GEN_129" "$IPAD_SCREENSHOT"
+          else
+            echo "WARNING: iPad screenshot not found at $IPAD_SCREENSHOT"
+          fi
+
+          echo "=== Screenshot upload complete ==="
+
     artifacts:
       - build/ios/ipa/*.ipa
       - /tmp/xcodebuild_logs/*.log
@@ -217,7 +585,7 @@ workflows:
       app_store_connect:
         auth: integration
         submit_to_testflight: false
-        submit_to_app_store: false
+        submit_to_app_store: true
       scripts:
         - name: Notify ArborDash API on build completion
           script: |
