@@ -194,8 +194,8 @@ workflows:
             LATEST="0"
           fi
           NEXT=$(($LATEST + 1))
+          echo "Latest from App Store Connect: $LATEST → next: $NEXT"
           agvtool new-version -all "$NEXT"
-          echo "Build number: $NEXT"
 
       - name: Build IPA
         script: |
