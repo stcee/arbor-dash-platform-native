@@ -534,7 +534,7 @@ workflows:
       app_store_connect:
         auth: integration
         submit_to_testflight: false
-        submit_to_app_store: false
+        submit_to_app_store: true
       scripts:
         - name: Notify ArborDash API on build completion
           script: |
