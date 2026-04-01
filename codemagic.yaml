@@ -197,8 +197,14 @@ workflows:
           else
             LATEST="0"
           fi
+          # Also check TestFlight builds which may not be reflected yet
+          LATEST_TF=$(app-store-connect get-latest-testflight-build-number "$APP_STORE_APP_ID" 2>/dev/null || echo "0")
+          # Use whichever is higher
+          if [ "$LATEST_TF" -gt "$LATEST" ] 2>/dev/null; then
+            LATEST="$LATEST_TF"
+          fi
           NEXT=$(($LATEST + 1))
-          echo "Latest from App Store Connect: $LATEST → next: $NEXT"
+          echo "Latest from App Store Connect: $LATEST (TF: $LATEST_TF) → next: $NEXT"
           agvtool new-version -all "$NEXT"
 
       - name: Build IPA
@@ -412,7 +418,7 @@ workflows:
           review_resp = api_call("POST", "/v1/appStoreReviewDetails", {
               "data": {"type": "appStoreReviewDetails", "attributes": {
                   "contactFirstName": "Rick", "contactLastName": "Courcy",
-                  "contactEmail": "rick@madebyrick.com", "contactPhone": "+15550100",
+                  "contactEmail": "rick@madebyrick.com", "contactPhone": "+15555550100",
                   "demoAccountRequired": False,
                   "notes": f"White-labeled crew management app for {app_name}. Unlisted distribution to company employees only."
               }, "relationships": {"appStoreVersion": {"data": {"type": "appStoreVersions", "id": version_id}}}}
