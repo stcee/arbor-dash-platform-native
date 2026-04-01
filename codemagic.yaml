@@ -230,26 +230,27 @@ workflows:
 
               if not all([key_id, issuer_id, private_key]):
                   print("WARNING: Missing App Store Connect credentials")
-                  print(f"  key_id={'set' if key_id else 'MISSING'}, issuer_id={'set' if issuer_id else 'MISSING'}, private_key={'set' if private_key else 'MISSING'}")
                   return None
 
-              # Fix escaped newlines from env var
-              private_key = private_key.replace('\\n', '\n')
+              # Codemagic stores secrets as @file: references — resolve to actual content
+              if private_key.startswith('@file:'):
+                  file_path = private_key[6:]  # Strip '@file:' prefix
+                  print(f"  Reading private key from file: {file_path}")
+                  with open(file_path, "r") as f:
+                      private_key = f.read()
+              else:
+                  # Fix escaped newlines from env var
+                  private_key = private_key.replace('\\n', '\n')
 
               now = int(time.time())
               header = json.dumps({"alg": "ES256", "kid": key_id, "typ": "JWT"})
               payload = json.dumps({"iss": issuer_id, "iat": now, "exp": now + 1200, "aud": "appstoreconnect-v1"})
               signing_input = f"{b64url(header)}.{b64url(payload)}"
 
-              # Use openssl to sign (available on macOS)
+              # Write key to temp file for openssl
               key_file = "/tmp/asc_key.p8"
               with open(key_file, "w") as f:
                   f.write(private_key)
-
-              # Debug: verify the key file looks right
-              with open(key_file, "r") as f:
-                  lines = f.readlines()
-                  print(f"  Key file: {len(lines)} lines, starts with: {lines[0].strip()[:30] if lines else 'EMPTY'}")
 
               result = subprocess.run(
                   ["openssl", "dgst", "-sha256", "-sign", key_file],
