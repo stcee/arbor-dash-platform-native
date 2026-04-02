@@ -520,6 +520,16 @@ workflows:
           print("=== Metadata and screenshots complete ===")
           PYEOF
 
+      - name: Upload IPA to App Store Connect
+        script: |
+          IPA_PATH=$(find build/ios/ipa -name "*.ipa" | head -1)
+          if [ -z "$IPA_PATH" ]; then
+            echo "ERROR: No IPA found"
+            exit 1
+          fi
+          echo "Uploading $IPA_PATH to App Store Connect..."
+          app-store-connect publish --path "$IPA_PATH"
+
     artifacts:
       - build/ios/ipa/*.ipa
       - /tmp/xcodebuild_logs/*.log
@@ -531,10 +541,6 @@ workflows:
         notify:
           success: true
           failure: true
-      app_store_connect:
-        auth: integration
-        submit_to_testflight: false
-        submit_to_app_store: true
       scripts:
         - name: Notify ArborDash API on build completion
           script: |
