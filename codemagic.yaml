@@ -427,8 +427,8 @@ workflows:
           # 6. Upload Screenshots
           print("Uploading screenshots...")
           screenshot_map = {
-              "APP_IPHONE_65": os.path.join(build_dir, "screenshots/iOS/arbordash-iphone-screenshot.png"),
-              "APP_IPAD_PRO_3GEN_129": os.path.join(build_dir, "screenshots/iOS/arbordash-ipad-screenshot.png"),
+              "APP_IPHONE_65": os.path.join(build_dir, "screenshots/iOS/ArborDash-Screenshot_(iPhone 6.5).png"),
+              "APP_IPAD_PRO_3GEN_129": os.path.join(build_dir, "screenshots/iOS/ArborDash-Screenshot_(iPad Pro 12.9).png"),
           }
 
           if not en_loc_id:
