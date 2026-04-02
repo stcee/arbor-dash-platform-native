@@ -418,7 +418,7 @@ workflows:
           review_resp = api_call("POST", "/v1/appStoreReviewDetails", {
               "data": {"type": "appStoreReviewDetails", "attributes": {
                   "contactFirstName": "Rick", "contactLastName": "Courcy",
-                  "contactEmail": "rick@madebyrick.com", "contactPhone": "+15555550100",
+                  "contactEmail": "rick@madebyrick.com", "contactPhone": "+12077544024",
                   "demoAccountRequired": False,
                   "notes": f"White-labeled crew management app for {app_name}. Unlisted distribution to company employees only."
               }, "relationships": {"appStoreVersion": {"data": {"type": "appStoreVersions", "id": version_id}}}}
