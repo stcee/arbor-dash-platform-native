@@ -118,7 +118,18 @@ workflows:
         script: |
           ICON_DIR="ios/App/App/Assets.xcassets/AppIcon.appiconset"
           mkdir -p "$ICON_DIR"
-          curl -L -o /tmp/AppIcon-1024.png "$APP_ICON_URL"
+          curl -L -o /tmp/AppIcon-1024-raw.png "$APP_ICON_URL"
+
+          # Strip alpha channel — Apple rejects icons with transparency
+          # Flatten onto white background using macOS built-in Python3
+          python3 -c "
+          import subprocess, tempfile, os
+          # Use sips to convert to JPEG (strips alpha), then back to PNG
+          subprocess.run(['sips', '-s', 'format', 'jpeg', '/tmp/AppIcon-1024-raw.png', '--out', '/tmp/AppIcon-1024.jpg'], capture_output=True)
+          subprocess.run(['sips', '-s', 'format', 'png', '/tmp/AppIcon-1024.jpg', '--out', '/tmp/AppIcon-1024.png'], capture_output=True)
+          os.remove('/tmp/AppIcon-1024.jpg')
+          print('Alpha channel stripped via JPEG round-trip')
+          "
 
           # Generate all required iOS icon sizes using sips (built into macOS)
           for SPEC in "20:Icon-20" "40:Icon-20@2x" "60:Icon-20@3x" \
