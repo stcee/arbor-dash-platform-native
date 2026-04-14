@@ -612,6 +612,11 @@ workflows:
 
       - name: Add Android platform and sync
         script: |
+          # Override APP_ID for Android if it contains Java reserved words
+          if echo "$APP_ID" | grep -qE '\.(default|class|int|public|private|static|void|return)(\.|$)'; then
+            export APP_ID=$(echo "$APP_ID" | sed 's/\.default/\.main/g; s/\.class/\.cls/g; s/\.int/\.integer/g; s/\.public/\.pub/g; s/\.private/\.priv/g; s/\.static/\.stat/g; s/\.void/\.vd/g; s/\.return/\.ret/g')
+            echo "Overrode APP_ID for Android (Java keyword): $APP_ID"
+          fi
           npx cap add android 2>/dev/null || true
           npx cap sync android
 
