@@ -610,13 +610,17 @@ workflows:
           mkdir -p www
           [ -f www/index.html ] || echo '<html></html>' > www/index.html
 
+      - name: Fix APP_ID for Android (Java reserved words)
+        script: |
+          # Replace Java reserved keywords in APP_ID and persist for subsequent steps
+          if echo "$APP_ID" | grep -qE '\.(default|class|int|public|private|static|void|return)(\.|$)'; then
+            FIXED_APP_ID=$(echo "$APP_ID" | sed 's/\.default/\.main/g')
+            echo "APP_ID=$FIXED_APP_ID" >> $CM_ENV
+            echo "Fixed APP_ID for Android: $APP_ID -> $FIXED_APP_ID"
+          fi
+
       - name: Add Android platform and sync
         script: |
-          # Override APP_ID for Android if it contains Java reserved words
-          if echo "$APP_ID" | grep -qE '\.(default|class|int|public|private|static|void|return)(\.|$)'; then
-            export APP_ID=$(echo "$APP_ID" | sed 's/\.default/\.main/g; s/\.class/\.cls/g; s/\.int/\.integer/g; s/\.public/\.pub/g; s/\.private/\.priv/g; s/\.static/\.stat/g; s/\.void/\.vd/g; s/\.return/\.ret/g')
-            echo "Overrode APP_ID for Android (Java keyword): $APP_ID"
-          fi
           npx cap add android 2>/dev/null || true
           npx cap sync android
 
@@ -624,7 +628,9 @@ workflows:
         script: |
           if [ -n "${GOOGLE_SERVICES_JSON}" ]; then
             echo "${GOOGLE_SERVICES_JSON}" > android/app/google-services.json
-            echo "google-services.json written for FCM push notifications"
+            # Patch package name to match the Android APP_ID (may differ from iOS)
+            sed -i.bak "s/\"package_name\": *\"[^\"]*\"/\"package_name\": \"${APP_ID}\"/g" android/app/google-services.json
+            echo "google-services.json written with package_name=$APP_ID"
 
             # Add Google Services Gradle plugin to project-level build.gradle
             ROOT_GRADLE="android/build.gradle"
