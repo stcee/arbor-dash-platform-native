@@ -655,10 +655,10 @@ workflows:
           # App display name
           sed -i.bak "s/android:label=\"[^\"]*\"/android:label=\"${APP_NAME}\"/" "$MANIFEST"
 
-          # Background geolocation permissions
+          # Background geolocation + microphone permissions
           for PERM in "ACCESS_FINE_LOCATION" "ACCESS_BACKGROUND_LOCATION" \
                       "FOREGROUND_SERVICE" "FOREGROUND_SERVICE_LOCATION" \
-                      "POST_NOTIFICATIONS"; do
+                      "POST_NOTIFICATIONS" "RECORD_AUDIO" "MODIFY_AUDIO_SETTINGS"; do
             if ! grep -q "$PERM" "$MANIFEST"; then
               sed -i.bak "s|<application|<uses-permission android:name=\"android.permission.${PERM}\"/>\n    <application|" "$MANIFEST"
             fi
