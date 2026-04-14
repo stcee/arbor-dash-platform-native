@@ -754,16 +754,16 @@ workflows:
       scripts:
         - name: Notify ArborDash API on build completion
           script: |
-            if [ "${CM_BUILD_STEP_STATUS}" = "success" ]; then
+            # Determine build result — check for APK artifact as primary signal
+            APK_PATH=$(find android/app/build/outputs/apk/release -name "*.apk" 2>/dev/null | head -1)
+            if [ -n "$APK_PATH" ]; then
+              BUILD_RESULT="success"
+            elif [ "${CM_BUILD_STEP_STATUS}" = "success" ]; then
               BUILD_RESULT="success"
             else
               BUILD_RESULT="failure"
             fi
-            echo "Build result: ${BUILD_RESULT} (step status: ${CM_BUILD_STEP_STATUS})"
-            echo "ARBORDASH_BUILD_ID=${ARBORDASH_BUILD_ID:-EMPTY}"
-            echo "COMPANY_CODE=${COMPANY_CODE:-EMPTY}"
-            echo "APP_NAME=${APP_NAME:-EMPTY}"
-            echo "CM_BUILD_ID=${CM_BUILD_ID}"
+            echo "Build result: ${BUILD_RESULT} (APK found: ${APK_PATH:-none}, step status: ${CM_BUILD_STEP_STATUS:-empty})"
             RESPONSE=$(curl -s -w "\nHTTP_CODE:%{http_code}" -X POST "https://api.arbordash.app/api/app-builds/webhook" \
               -H "Content-Type: application/json" \
               -H "Authorization: Bearer ${WEBHOOK_SECRET}" \
