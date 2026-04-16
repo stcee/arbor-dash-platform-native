@@ -12,19 +12,19 @@
     "cap:add:android": "npx cap add android"
   },
   "dependencies": {
-    "@capacitor/core": "^6.0.0",
-    "@capacitor/ios": "^6.0.0",
-    "@capacitor/android": "^6.0.0",
-    "@capacitor/app": "^6.0.0",
-    "@capacitor/geolocation": "^6.0.0",
-    "@capacitor/network": "^6.0.0",
-    "@capacitor/preferences": "^6.0.0",
-    "@capacitor/local-notifications": "^6.0.0",
-    "@capacitor/push-notifications": "^6.0.0",
-    "@capacitor-community/background-geolocation": "^1.2.0"
+    "@capacitor/core": "^8.1.0",
+    "@capacitor/ios": "^8.1.0",
+    "@capacitor/android": "^8.1.0",
+    "@capacitor/app": "^8.0.1",
+    "@capacitor/geolocation": "^8.1.0",
+    "@capacitor/network": "^8.0.1",
+    "@capacitor/preferences": "^8.0.1",
+    "@capacitor/local-notifications": "^8.0.1",
+    "@capacitor/push-notifications": "^8.0.1",
+    "@capacitor-community/background-geolocation": "^1.2.26"
   },
   "devDependencies": {
-    "@capacitor/cli": "^6.0.0",
+    "@capacitor/cli": "^8.1.0",
     "typescript": "^5.4.0"
   }
 }
