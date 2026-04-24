@@ -60,8 +60,24 @@ workflows:
 
       - name: Add iOS platform and sync
         script: |
-          npx cap add ios 2>/dev/null || true
+          # Do NOT suppress errors here — if cap add fails, the next step
+          # will fail with a misleading "No Podfile" error. Let cap's
+          # actual failure surface.
+          set -e
+          if [ -d "ios/App" ]; then
+            echo "ios/App already exists — skipping cap add ios"
+          else
+            echo "Running cap add ios..."
+            npx cap add ios
+          fi
+          echo "Running cap sync ios..."
           npx cap sync ios
+          echo "Verifying ios/App/Podfile exists..."
+          ls -la ios/App/ || true
+          if [ ! -f "ios/App/Podfile" ]; then
+            echo "ERROR: ios/App/Podfile missing after cap add/sync"
+            exit 1
+          fi
 
       - name: Install CocoaPods
         script: cd ios/App && pod install --repo-update
