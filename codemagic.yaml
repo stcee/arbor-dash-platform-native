@@ -109,60 +109,109 @@ workflows:
 
       - name: Patch Info.plist — permissions & app name
         script: |
-          PLIST="ios/App/App/Info.plist"
-          PB="/usr/libexec/PlistBuddy"
+          # Use Python plistlib instead of PlistBuddy. PlistBuddy's -c flag
+          # uses single-quoted shell args, so any apostrophe or single quote
+          # inside a purpose string silently breaks the command. plistlib
+          # treats values as opaque Python strings — totally safe.
+          set -e
+          export APP_NAME
+          python3 <<'PYEOF'
+          import os, plistlib
 
-          # Location permissions (background geolocation).
-          # Apple Guideline 5.1.1(ii) requires purpose strings to clearly explain
-          # the use AND give a concrete example. Generic strings like "tracks your
-          # location for crew management" are rejected.
-          LOC_ALWAYS_AND_WHEN_IN_USE="${APP_NAME} uses your location to show your real-time position on the crew map so dispatchers and teammates can see where you are between jobs, automatically log job-site arrival and departure times for accurate timesheets, and record GPS coordinates for each tree care service performed at customer properties. For example, when you start a job at a customer's property, your location is recorded so the office can confirm arrival times and the route taken between job sites."
-          LOC_WHEN_IN_USE="${APP_NAME} uses your current location to verify you are at the correct customer property when starting or completing a job, attach GPS coordinates to service records, and display nearby jobs on the crew map. For example, tapping 'Clock In' at a tree-pruning appointment captures the property's GPS coordinates so the office knows you arrived on time."
-          LOC_ALWAYS="${APP_NAME} uses your location in the background to keep the crew map updated while you drive between jobs and to log accurate arrival times even when the app is not on screen. For example, when driving from one customer property to the next, the dispatcher can see your live route and ETA without you having to open the app."
+          path = "ios/App/App/Info.plist"
+          with open(path, "rb") as f:
+              plist = plistlib.load(f)
 
-          $PB -c "Add :NSLocationAlwaysAndWhenInUseUsageDescription string '${LOC_ALWAYS_AND_WHEN_IN_USE}'" "$PLIST" 2>/dev/null || \
-          $PB -c "Set :NSLocationAlwaysAndWhenInUseUsageDescription '${LOC_ALWAYS_AND_WHEN_IN_USE}'" "$PLIST"
+          app_name = os.environ.get("APP_NAME", "ArborDash")
 
-          $PB -c "Add :NSLocationWhenInUseUsageDescription string '${LOC_WHEN_IN_USE}'" "$PLIST" 2>/dev/null || \
-          $PB -c "Set :NSLocationWhenInUseUsageDescription '${LOC_WHEN_IN_USE}'" "$PLIST"
-
-          $PB -c "Add :NSLocationAlwaysUsageDescription string '${LOC_ALWAYS}'" "$PLIST" 2>/dev/null || \
-          $PB -c "Set :NSLocationAlwaysUsageDescription '${LOC_ALWAYS}'" "$PLIST"
-
-          # Microphone — Twilio Voice in-app calls. Required if the user picks
-          # up an incoming customer call from the dashboard. Same purpose-string
-          # rule as location: must explain + give an example.
-          MIC_DESC="${APP_NAME} uses the microphone so you can answer or place customer phone calls inside the app using the built-in softphone. For example, when a customer calls your business number and you tap 'Answer' on the incoming-call screen, the microphone captures your voice for the conversation."
-          $PB -c "Add :NSMicrophoneUsageDescription string '${MIC_DESC}'" "$PLIST" 2>/dev/null || \
-          $PB -c "Set :NSMicrophoneUsageDescription '${MIC_DESC}'" "$PLIST"
-
-          # Camera — used for taking job-site photos and signing forms. Even
-          # if not currently triggered, Capacitor's WebKit may surface a prompt
-          # for getUserMedia + video, so a string belongs here. Cheap insurance
-          # against future rejections.
-          CAM_DESC="${APP_NAME} uses the camera so you can take photos of trees, hazards, and completed work directly from a job and attach them to estimates, invoices, and service records. For example, after pruning a tree you can tap 'Add Photo' on the job and the camera captures the result for the customer's report."
-          $PB -c "Add :NSCameraUsageDescription string '${CAM_DESC}'" "$PLIST" 2>/dev/null || \
-          $PB -c "Set :NSCameraUsageDescription '${CAM_DESC}'" "$PLIST"
-
-          # Photo library — used when picking existing photos to attach.
-          PHOTO_DESC="${APP_NAME} accesses your photo library so you can attach existing job-site photos to estimates, invoices, and service records. For example, if you took a photo of damage earlier on your phone's default camera, you can select it from your library to include in the customer's quote."
-          $PB -c "Add :NSPhotoLibraryUsageDescription string '${PHOTO_DESC}'" "$PLIST" 2>/dev/null || \
-          $PB -c "Set :NSPhotoLibraryUsageDescription '${PHOTO_DESC}'" "$PLIST"
+          # Apple Guideline 5.1.1(ii) requires purpose strings to clearly
+          # explain the use AND give a concrete example. Generic strings
+          # like "tracks your location for crew management" are rejected.
+          # All strings below avoid embedded apostrophes / single quotes
+          # for compatibility with any downstream tooling.
+          plist["NSLocationAlwaysAndWhenInUseUsageDescription"] = (
+              f"{app_name} uses your location to show your real-time position on "
+              "the crew map so dispatchers and teammates can see where you are "
+              "between jobs, automatically log job-site arrival and departure "
+              "times for accurate timesheets, and record GPS coordinates for "
+              "each tree care service performed at a customer property. For "
+              "example, when you start a job at a customer property, your "
+              "location is recorded so the office can confirm arrival times "
+              "and the route taken between job sites."
+          )
+          plist["NSLocationWhenInUseUsageDescription"] = (
+              f"{app_name} uses your current location to verify you are at the "
+              "correct customer property when starting or completing a job, "
+              "attach GPS coordinates to service records, and display nearby "
+              "jobs on the crew map. For example, tapping the Clock In button "
+              "at a tree-pruning appointment captures the property GPS "
+              "coordinates so the office knows you arrived on time."
+          )
+          plist["NSLocationAlwaysUsageDescription"] = (
+              f"{app_name} uses your location in the background to keep the "
+              "crew map updated while you drive between jobs and to log "
+              "accurate arrival times even when the app is not on screen. "
+              "For example, when driving from one customer property to the "
+              "next, the dispatcher can see your live route and ETA without "
+              "you having to open the app."
+          )
+          plist["NSMicrophoneUsageDescription"] = (
+              f"{app_name} uses the microphone so you can answer or place "
+              "customer phone calls inside the app using the built-in "
+              "softphone. For example, when a customer calls your business "
+              "number and you tap Answer on the incoming-call screen, the "
+              "microphone captures your voice for the conversation."
+          )
+          plist["NSCameraUsageDescription"] = (
+              f"{app_name} uses the camera so you can take photos of trees, "
+              "hazards, and completed work directly from a job and attach "
+              "them to estimates, invoices, and service records. For example, "
+              "after pruning a tree you can tap Add Photo on the job and the "
+              "camera captures the result for the customer report."
+          )
+          plist["NSPhotoLibraryUsageDescription"] = (
+              f"{app_name} accesses your photo library so you can attach "
+              "existing job-site photos to estimates, invoices, and service "
+              "records. For example, if you took a photo of damage earlier "
+              "on your phone default camera, you can select it from your "
+              "library to include in the customer quote."
+          )
 
           # Background modes: location + remote notifications
-          $PB -c "Add :UIBackgroundModes array" "$PLIST" 2>/dev/null || true
-          $PB -c "Add :UIBackgroundModes: string location" "$PLIST" 2>/dev/null || true
-          $PB -c "Add :UIBackgroundModes: string remote-notification" "$PLIST" 2>/dev/null || true
+          modes = set(plist.get("UIBackgroundModes", []))
+          modes.update({"location", "remote-notification"})
+          plist["UIBackgroundModes"] = sorted(modes)
 
           # App display name
-          $PB -c "Set :CFBundleName ${APP_NAME}" "$PLIST" 2>/dev/null || \
-          $PB -c "Add :CFBundleName string ${APP_NAME}" "$PLIST"
-          $PB -c "Set :CFBundleDisplayName ${APP_NAME}" "$PLIST" 2>/dev/null || \
-          $PB -c "Add :CFBundleDisplayName string ${APP_NAME}" "$PLIST"
+          plist["CFBundleName"] = app_name
+          plist["CFBundleDisplayName"] = app_name
 
           # Export compliance — app only uses standard HTTPS (exempt)
-          $PB -c "Add :ITSAppUsesNonExemptEncryption bool false" "$PLIST" 2>/dev/null || \
-          $PB -c "Set :ITSAppUsesNonExemptEncryption false" "$PLIST"
+          plist["ITSAppUsesNonExemptEncryption"] = False
+
+          with open(path, "wb") as f:
+              plistlib.dump(plist, f)
+
+          # Verification — print the keys we just set so the build log shows
+          # they actually landed (catches future regressions immediately).
+          print("Info.plist patched successfully. Keys present:")
+          for k in [
+              "NSLocationAlwaysAndWhenInUseUsageDescription",
+              "NSLocationWhenInUseUsageDescription",
+              "NSLocationAlwaysUsageDescription",
+              "NSMicrophoneUsageDescription",
+              "NSCameraUsageDescription",
+              "NSPhotoLibraryUsageDescription",
+              "UIBackgroundModes",
+              "CFBundleName",
+              "CFBundleDisplayName",
+              "ITSAppUsesNonExemptEncryption",
+          ]:
+              v = plist.get(k)
+              if isinstance(v, str) and len(v) > 60:
+                  v = v[:60] + "..."
+              print(f"  {k} = {v}")
+          PYEOF
 
       - name: Set up push notification entitlements
         script: |
