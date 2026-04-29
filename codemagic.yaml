@@ -34,12 +34,13 @@ workflows:
         - webhook_config
 
       vars:
-        XCODE_WORKSPACE: "ios/App/App.xcworkspace"
+        # Capacitor 8 uses Swift Package Manager (no .xcworkspace, no CocoaPods).
+        # Build target is the project file directly.
+        XCODE_PROJECT: "ios/App/App.xcodeproj"
         XCODE_SCHEME: "App"
 
       node: v22
       xcode: latest
-      cocoapods: default
 
     triggering:
       events:
@@ -74,13 +75,19 @@ workflows:
           npx cap sync ios
           echo "Verifying ios/App/Podfile exists..."
           ls -la ios/App/ || true
-          if [ ! -f "ios/App/Podfile" ]; then
-            echo "ERROR: ios/App/Podfile missing after cap add/sync"
+          # Capacitor 8 uses Swift Package Manager — no Podfile is generated.
+          # Verify the Xcode project + SPM package exist instead.
+          if [ ! -d "ios/App/App.xcodeproj" ]; then
+            echo "ERROR: ios/App/App.xcodeproj missing after cap add/sync"
+            exit 1
+          fi
+          if [ ! -d "ios/App/CapApp-SPM" ]; then
+            echo "ERROR: ios/App/CapApp-SPM missing — Capacitor SPM package not generated"
             exit 1
           fi
 
-      - name: Install CocoaPods
-        script: cd ios/App && pod install --repo-update
+      # NOTE: No CocoaPods step — Capacitor 8 uses Swift Package Manager.
+      # Xcode resolves SPM dependencies automatically during the build.
 
       - name: Patch Info.plist — permissions & app name
         script: |
@@ -263,8 +270,9 @@ workflows:
 
       - name: Build IPA
         script: |
+          # Capacitor 8 / SPM build — point at the .xcodeproj, not a workspace.
           xcode-project build-ipa \
-            --workspace "$XCODE_WORKSPACE" \
+            --project "$XCODE_PROJECT" \
             --scheme "$XCODE_SCHEME"
 
       - name: Set App Store metadata and upload screenshots
