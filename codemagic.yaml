@@ -86,8 +86,26 @@ workflows:
             exit 1
           fi
 
-      # NOTE: No CocoaPods step — Capacitor 8 uses Swift Package Manager.
-      # Xcode resolves SPM dependencies automatically during the build.
+      # Capacitor 8 uses Swift Package Manager. xcodebuild can't read build
+      # settings until SPM packages are resolved, so do that explicitly here
+      # before any tooling tries to invoke -showBuildSettings (build-ipa,
+      # agvtool, signing, etc).
+      - name: Resolve Swift Package dependencies
+        script: |
+          set -e
+          cd ios/App
+          echo "Listing available schemes:"
+          xcodebuild -list -project App.xcodeproj || true
+          echo "Resolving SPM packages..."
+          xcodebuild -resolvePackageDependencies \
+            -project App.xcodeproj \
+            -scheme App
+          echo "Verifying build settings can be read..."
+          xcodebuild -showBuildSettings \
+            -project App.xcodeproj \
+            -scheme App \
+            -configuration Release \
+            > /dev/null
 
       - name: Patch Info.plist — permissions & app name
         script: |
