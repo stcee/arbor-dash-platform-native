@@ -87,15 +87,42 @@ workflows:
           PLIST="ios/App/App/Info.plist"
           PB="/usr/libexec/PlistBuddy"
 
-          # Location permissions (background geolocation)
-          $PB -c "Add :NSLocationAlwaysAndWhenInUseUsageDescription string '${APP_NAME} tracks your location for crew management.'" "$PLIST" 2>/dev/null || \
-          $PB -c "Set :NSLocationAlwaysAndWhenInUseUsageDescription '${APP_NAME} tracks your location for crew management.'" "$PLIST"
+          # Location permissions (background geolocation).
+          # Apple Guideline 5.1.1(ii) requires purpose strings to clearly explain
+          # the use AND give a concrete example. Generic strings like "tracks your
+          # location for crew management" are rejected.
+          LOC_ALWAYS_AND_WHEN_IN_USE="${APP_NAME} uses your location to show your real-time position on the crew map so dispatchers and teammates can see where you are between jobs, automatically log job-site arrival and departure times for accurate timesheets, and record GPS coordinates for each tree care service performed at customer properties. For example, when you start a job at a customer's property, your location is recorded so the office can confirm arrival times and the route taken between job sites."
+          LOC_WHEN_IN_USE="${APP_NAME} uses your current location to verify you are at the correct customer property when starting or completing a job, attach GPS coordinates to service records, and display nearby jobs on the crew map. For example, tapping 'Clock In' at a tree-pruning appointment captures the property's GPS coordinates so the office knows you arrived on time."
+          LOC_ALWAYS="${APP_NAME} uses your location in the background to keep the crew map updated while you drive between jobs and to log accurate arrival times even when the app is not on screen. For example, when driving from one customer property to the next, the dispatcher can see your live route and ETA without you having to open the app."
 
-          $PB -c "Add :NSLocationWhenInUseUsageDescription string '${APP_NAME} uses your location while in use.'" "$PLIST" 2>/dev/null || \
-          $PB -c "Set :NSLocationWhenInUseUsageDescription '${APP_NAME} uses your location while in use.'" "$PLIST"
+          $PB -c "Add :NSLocationAlwaysAndWhenInUseUsageDescription string '${LOC_ALWAYS_AND_WHEN_IN_USE}'" "$PLIST" 2>/dev/null || \
+          $PB -c "Set :NSLocationAlwaysAndWhenInUseUsageDescription '${LOC_ALWAYS_AND_WHEN_IN_USE}'" "$PLIST"
 
-          $PB -c "Add :NSLocationAlwaysUsageDescription string '${APP_NAME} uses your location in the background for crew tracking.'" "$PLIST" 2>/dev/null || \
-          $PB -c "Set :NSLocationAlwaysUsageDescription '${APP_NAME} uses your location in the background for crew tracking.'" "$PLIST"
+          $PB -c "Add :NSLocationWhenInUseUsageDescription string '${LOC_WHEN_IN_USE}'" "$PLIST" 2>/dev/null || \
+          $PB -c "Set :NSLocationWhenInUseUsageDescription '${LOC_WHEN_IN_USE}'" "$PLIST"
+
+          $PB -c "Add :NSLocationAlwaysUsageDescription string '${LOC_ALWAYS}'" "$PLIST" 2>/dev/null || \
+          $PB -c "Set :NSLocationAlwaysUsageDescription '${LOC_ALWAYS}'" "$PLIST"
+
+          # Microphone — Twilio Voice in-app calls. Required if the user picks
+          # up an incoming customer call from the dashboard. Same purpose-string
+          # rule as location: must explain + give an example.
+          MIC_DESC="${APP_NAME} uses the microphone so you can answer or place customer phone calls inside the app using the built-in softphone. For example, when a customer calls your business number and you tap 'Answer' on the incoming-call screen, the microphone captures your voice for the conversation."
+          $PB -c "Add :NSMicrophoneUsageDescription string '${MIC_DESC}'" "$PLIST" 2>/dev/null || \
+          $PB -c "Set :NSMicrophoneUsageDescription '${MIC_DESC}'" "$PLIST"
+
+          # Camera — used for taking job-site photos and signing forms. Even
+          # if not currently triggered, Capacitor's WebKit may surface a prompt
+          # for getUserMedia + video, so a string belongs here. Cheap insurance
+          # against future rejections.
+          CAM_DESC="${APP_NAME} uses the camera so you can take photos of trees, hazards, and completed work directly from a job and attach them to estimates, invoices, and service records. For example, after pruning a tree you can tap 'Add Photo' on the job and the camera captures the result for the customer's report."
+          $PB -c "Add :NSCameraUsageDescription string '${CAM_DESC}'" "$PLIST" 2>/dev/null || \
+          $PB -c "Set :NSCameraUsageDescription '${CAM_DESC}'" "$PLIST"
+
+          # Photo library — used when picking existing photos to attach.
+          PHOTO_DESC="${APP_NAME} accesses your photo library so you can attach existing job-site photos to estimates, invoices, and service records. For example, if you took a photo of damage earlier on your phone's default camera, you can select it from your library to include in the customer's quote."
+          $PB -c "Add :NSPhotoLibraryUsageDescription string '${PHOTO_DESC}'" "$PLIST" 2>/dev/null || \
+          $PB -c "Set :NSPhotoLibraryUsageDescription '${PHOTO_DESC}'" "$PLIST"
 
           # Background modes: location + remote notifications
           $PB -c "Add :UIBackgroundModes array" "$PLIST" 2>/dev/null || true
