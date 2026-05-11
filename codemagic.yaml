@@ -698,13 +698,21 @@ workflows:
       scripts:
         - name: Notify ArborDash API on build completion
           script: |
-            # CM_BUILD_STEP_STATUS is the authoritative source — "success" or "failure"
-            if [ "${CM_BUILD_STEP_STATUS}" = "success" ]; then
+            # Mirror the Android workflow's IPA-existence-first detection.
+            # CM_BUILD_STEP_STATUS in publishing.scripts has been seen to report
+            # "failure" even when the IPA built successfully and uploaded to
+            # App Store Connect (caused by non-fatal warnings from the
+            # metadata/upload steps). Treat IPA existence as the source of
+            # truth, fall back to step status only if no IPA was produced.
+            IPA_PATH=$(find build/ios/ipa -name "*.ipa" 2>/dev/null | head -1)
+            if [ -n "$IPA_PATH" ]; then
+              BUILD_RESULT="success"
+            elif [ "${CM_BUILD_STEP_STATUS}" = "success" ]; then
               BUILD_RESULT="success"
             else
               BUILD_RESULT="failure"
             fi
-            echo "Build result: ${BUILD_RESULT} (step status: ${CM_BUILD_STEP_STATUS})"
+            echo "Build result: ${BUILD_RESULT} (IPA found: ${IPA_PATH:-none}, step status: ${CM_BUILD_STEP_STATUS:-empty})"
             curl -s -X POST "https://api.arbordash.app/api/app-builds/webhook" \
               -H "Content-Type: application/json" \
               -H "Authorization: Bearer ${WEBHOOK_SECRET}" \
