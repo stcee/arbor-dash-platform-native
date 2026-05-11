@@ -542,14 +542,39 @@ workflows:
                   }}
               }, jwt=jwt)
 
-          # 5. Set Review Details
-          print("Setting review details...")
+          # 5. Set Review Details — demo creds + detailed notes are CRITICAL.
+          # Without demoAccountRequired=True + working creds, Apple can't sign
+          # in to review and will reject. Notes include the unlisted-approval
+          # context so the reviewer doesn't reject under Guideline 3.2.
+          demo_email = os.environ.get("APPLE_REVIEW_DEMO_EMAIL", "demo@arbordash.app")
+          demo_password = os.environ.get("APPLE_REVIEW_DEMO_PASSWORD", "")
+          review_notes = (
+              f"{app_name} is a tenant-branded B2B internal app on the ArborDash platform "
+              "(a multi-tenant SaaS for tree care and landscaping businesses). The tenant company "
+              f"({app_name}) subscribes to ArborDash and uses this iOS app exclusively for their own "
+              "employees (crew leads, technicians, dispatchers, office staff). The app loads "
+              "dashboard.arbordash.app and requires sign-in with credentials provisioned by the tenant.\n\n"
+              "DEMO CREDENTIALS (use to sign in and review):\n"
+              f"  Email: {demo_email}\n"
+              f"  Password: {demo_password if demo_password else '(set APPLE_REVIEW_DEMO_PASSWORD env var)'}\n\n"
+              "After sign-in you will see the tenant dashboard with crew/jobs/scheduling/GPS/invoicing "
+              "features. There are no in-app purchases. There is no consumer-facing functionality.\n\n"
+              "DISTRIBUTION INTENT: UNLISTED. This app is provisioned to the tenant's employees only "
+              "via a private App Store link shared by the employer. It is not intended for public "
+              "discovery. The unlisted distribution request has been (or will be) submitted separately "
+              "for this Bundle ID as per Apple's published process for tenant-branded B2B internal apps. "
+              "Per prior approval from Apple Developer Support, app review approval triggers the manual "
+              "switch to Unlisted distribution by Apple support.\n\n"
+              "If you need additional context, please contact Rick Courcy at rick@madebyrick.com."
+          )
           review_resp = api_call("POST", "/v1/appStoreReviewDetails", {
               "data": {"type": "appStoreReviewDetails", "attributes": {
                   "contactFirstName": "Rick", "contactLastName": "Courcy",
                   "contactEmail": "rick@madebyrick.com", "contactPhone": "+12077544024",
-                  "demoAccountRequired": False,
-                  "notes": f"White-labeled crew management app for {app_name}. Unlisted distribution to company employees only."
+                  "demoAccountRequired": True,
+                  "demoAccountName": demo_email,
+                  "demoAccountPassword": demo_password,
+                  "notes": review_notes,
               }, "relationships": {"appStoreVersion": {"data": {"type": "appStoreVersions", "id": version_id}}}}
           }, jwt=jwt)
 
